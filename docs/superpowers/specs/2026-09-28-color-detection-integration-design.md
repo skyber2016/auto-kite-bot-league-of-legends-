@@ -181,6 +181,10 @@ Lazy init vì DXGI init cost ~50-100ms — chỉ tạo 1 lần, reuse.
 
 ## 6. Settings Configuration
 
+Tất cả tham số tunable từ file `settings.json` — không cần rebuild.
+
+### Full settings.json
+
 ```json
 {
   "ManualKey": 46,
@@ -195,20 +199,63 @@ Lazy init vì DXGI init cost ~50-100ms — chỉ tạo 1 lần, reuse.
   "MinClusterPixels": 10,
   "DetectionFpsCap": 60,
 
-  "EnableOverlay": false
+  "EnableOverlay": false,
+
+  "WindupBufferMs": 66,
+  "MinInputDelayMs": 33,
+  "OrbWalkTickRateMs": 33,
+  "AttackSpeedPollMs": 500
 }
 ```
 
-| Field | Description | Default |
+### Parameter Reference
+
+#### Key Bindings
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `ManualKey` | int | 46 (C) | VirtualKeyCode — Manual mode: chỉ attack khi detected |
+| `AutoKey` | int | 32 (Space) | VirtualKeyCode — Auto mode: attack liên tục, focus nếu detected |
+
+#### Color Detection
+
+| Field | Type | Default | Rationale |
+|---|---|---|---|
+| `TargetColorR` | int | 255 | Enemy HP bar color trong LoL thiên đỏ. Cần tune theo game settings |
+| `TargetColorG` | int | 0 | |
+| `TargetColorB` | int | 0 | |
+| `ColorTolerance` | int | 40 | Euclidean RGB distance. HP bar có gradient nhẹ → 40 cho phép chênh lệch ~23 mỗi channel. Quá thấp (<20) → miss pixel. Quá cao (>80) → false positive |
+| `CaptureSize` | int | 400 | Vùng capture 400×400px quanh chuột. AA range ~550 units ≈ 200-400px tùy zoom. 400 đủ cover. Giảm xuống 200 nếu muốn nhanh hơn |
+| `MinClusterPixels` | int | 10 | HP bar LoL thường 50-100+ pixels. 10 lọc noise mà không miss bar nhỏ (minion xa) |
+| `DetectionFpsCap` | int | 60 | Cap detection loop ≤ 60 FPS (~16.67ms/frame). Đủ responsive cho orb-walk timing. Giảm xuống 30 nếu CPU yếu |
+
+#### Overlay
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `EnableOverlay` | bool | false | Bật Direct2D transparent overlay để debug. Tốn thêm ~1-2% GPU |
+
+#### Orb-Walk Timing
+
+| Field | Type | Default | Rationale |
+|---|---|---|---|
+| `WindupBufferMs` | int | 66 | Buffer tránh cancel auto-attack quá sớm (ms). Ở 2.0 AS: windup ~150ms → buffer 66ms = 44% windup. Tăng nếu hay cancel AA (ping cao). Giảm nếu muốn kite nhanh hơn (ping thấp). Range khuyến nghị: 30-100ms |
+| `MinInputDelayMs` | int | 33 | Khoảng cách tối thiểu giữa 2 lần gửi input (ms). Tránh input bị drop do gửi quá nhanh. 33ms = ~30 inputs/s. Không nên < 16ms |
+| `OrbWalkTickRateMs` | int | 33 | Timer interval cho orb-walk loop (ms). 33ms = ~30 ticks/s. Giảm xuống 16 (60 ticks/s) nếu muốn responsive hơn nhưng tốn CPU. Không nên < 10ms |
+| `AttackSpeedPollMs` | int | 500 | Interval polling attack speed từ Riot Client API (ms). AS chỉ đổi khi level up hoặc mua item. 500ms đủ. Giảm xuống 200 nếu muốn reactive hơn |
+
+#### Removed
+
+| Old Field | Status |
+|---|---|
+| `ActivationKey` | Replaced by `ManualKey` + `AutoKey` |
+
+#### Hardcoded (không cần setting)
+
+| Param | Value | Reason |
 |---|---|---|
-| `ManualKey` | VirtualKeyCode cho Manual mode | 46 (C) |
-| `AutoKey` | VirtualKeyCode cho Auto mode | 32 (Space) |
-| `TargetColorR/G/B` | Màu HP bar cần detect | 255, 0, 0 (đỏ) |
-| `ColorTolerance` | Ngưỡng dung sai Euclidean RGB | 40 |
-| `CaptureSize` | Vùng capture quanh chuột (px) | 400 |
-| `MinClusterPixels` | Lọc nhiễu cluster nhỏ | 10 |
-| `DetectionFpsCap` | Giới hạn FPS detection | 60 |
-| `EnableOverlay` | Bật/tắt Direct2D overlay debug | false |
+| `CheckLeagueProcess sleep` | 2000ms | Chỉ chạy khi game chưa mở, không ảnh hưởng gameplay |
+| Champion base values | From Riot API | Auto-fetched per game |
 
 ---
 
