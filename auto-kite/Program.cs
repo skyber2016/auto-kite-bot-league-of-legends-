@@ -1,3 +1,4 @@
+#nullable enable
 using LowLevelInput.Hooks;
 using Newtonsoft.Json.Linq;
 using System;
