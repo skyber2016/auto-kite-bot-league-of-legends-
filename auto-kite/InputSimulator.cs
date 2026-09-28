@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Runtime.InteropServices;
 
 namespace OddAutoWalker
@@ -11,6 +11,9 @@ namespace OddAutoWalker
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr GetMessageExtraInfo();
+
+        // Cached — avoids reflection-based Marshal.SizeOf on every call
+        private static readonly int InputSize = Marshal.SizeOf(typeof(Input));
 
         [Flags]
         private enum InputType
@@ -101,6 +104,116 @@ namespace OddAutoWalker
             public readonly ushort wParamH;
         }
 
+        /// <summary>
+        /// Sends attack-move-click as a single batched SendInput call:
+        /// KeyDown(scancode) → MouseDown(Left) → MouseUp(Left) → KeyUp(scancode)
+        /// 4 inputs in 1 syscall instead of 4 separate kernel transitions.
+        /// </summary>
+        public static void SendAttackClick(ushort attackScancode)
+        {
+            var extraInfo = GetMessageExtraInfo();
+            Input[] inputs = new Input[4]
+            {
+                new Input
+                {
+                    type = (int)InputType.Keyboard,
+                    u = new InputUnion
+                    {
+                        ki = new KeyboardInput
+                        {
+                            wVk = 0,
+                            wScan = attackScancode,
+                            dwFlags = (uint)(KeyEventF.KeyDown | KeyEventF.Scancode),
+                            dwExtraInfo = extraInfo
+                        }
+                    }
+                },
+                new Input
+                {
+                    type = (int)InputType.Mouse,
+                    u = new InputUnion
+                    {
+                        mi = new MouseInput
+                        {
+                            mouseData = 0,
+                            dwFlags = (uint)MouseEventF.LeftDown,
+                            dwExtraInfo = extraInfo
+                        }
+                    }
+                },
+                new Input
+                {
+                    type = (int)InputType.Mouse,
+                    u = new InputUnion
+                    {
+                        mi = new MouseInput
+                        {
+                            mouseData = 0,
+                            dwFlags = (uint)MouseEventF.LeftUp,
+                            dwExtraInfo = extraInfo
+                        }
+                    }
+                },
+                new Input
+                {
+                    type = (int)InputType.Keyboard,
+                    u = new InputUnion
+                    {
+                        ki = new KeyboardInput
+                        {
+                            wVk = 0,
+                            wScan = attackScancode,
+                            dwFlags = (uint)(KeyEventF.KeyUp | KeyEventF.Scancode),
+                            dwExtraInfo = extraInfo
+                        }
+                    }
+                }
+            };
+
+            SendInput(4, inputs, InputSize);
+        }
+
+        /// <summary>
+        /// Sends right-click (move command) as a single batched SendInput call:
+        /// MouseDown(Right) → MouseUp(Right)
+        /// 2 inputs in 1 syscall instead of 2 separate kernel transitions.
+        /// </summary>
+        public static void SendMoveClick()
+        {
+            var extraInfo = GetMessageExtraInfo();
+            Input[] inputs = new Input[2]
+            {
+                new Input
+                {
+                    type = (int)InputType.Mouse,
+                    u = new InputUnion
+                    {
+                        mi = new MouseInput
+                        {
+                            mouseData = 0,
+                            dwFlags = (uint)MouseEventF.RightDown,
+                            dwExtraInfo = extraInfo
+                        }
+                    }
+                },
+                new Input
+                {
+                    type = (int)InputType.Mouse,
+                    u = new InputUnion
+                    {
+                        mi = new MouseInput
+                        {
+                            mouseData = 0,
+                            dwFlags = (uint)MouseEventF.RightUp,
+                            dwExtraInfo = extraInfo
+                        }
+                    }
+                }
+            };
+
+            SendInput(2, inputs, InputSize);
+        }
+
         public static class Keyboard
         {
             public static void KeyDown(ushort keycode)
@@ -123,7 +236,7 @@ namespace OddAutoWalker
                             }
                         };
 
-                SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Input)));
+                SendInput((uint)inputs.Length, inputs, InputSize);
             }
 
             public static void KeyUp(ushort keycode)
@@ -146,7 +259,7 @@ namespace OddAutoWalker
                             }
                         };
 
-                SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Input)));
+                SendInput((uint)inputs.Length, inputs, InputSize);
             }
 
             public static void KeyPress(ushort keycode)
@@ -200,7 +313,7 @@ namespace OddAutoWalker
                             }
                         };
 
-                SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Input)));
+                SendInput((uint)inputs.Length, inputs, InputSize);
             }
 
             public static void MouseUp(Buttons button)
@@ -236,7 +349,7 @@ namespace OddAutoWalker
                             }
                         };
 
-                SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Input)));
+                SendInput((uint)inputs.Length, inputs, InputSize);
             }
 
             public static void MouseClick(Buttons button)

@@ -1,0 +1,13 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio / Rider / VSCode
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# SDD scratch & workspace
+.superpowers/

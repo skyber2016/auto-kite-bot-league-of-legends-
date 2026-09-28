@@ -1,12 +1,15 @@
-﻿using LowLevelInput.Hooks;
+using LowLevelInput.Hooks;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Net;
+using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Timers;
+using Timer = System.Timers.Timer;
 
 namespace OddAutoWalker
 {
@@ -20,19 +23,26 @@ namespace OddAutoWalker
         private const string ChampionStatsEndpoint = @"https://raw.communitydragon.org/latest/game/data/characters/";
         private const string SettingsFile = @"settings\settings.json";
 
-        private static bool HasProcess = false;
-        private static bool IsExiting = false;
-        private static bool IsIntializingValues = false;
-        private static bool IsUpdatingAttackValues = false;
+        // Thread-safe flags — volatile ensures cross-thread visibility
+        private static volatile bool HasProcess = false;
+        private static volatile bool IsExiting = false;
+        private static volatile bool IsIntializingValues = false;
+        private static volatile bool IsUpdatingAttackValues = false;
 
         private static readonly Settings CurrentSettings = new Settings();
-        private static readonly WebClient Client = new WebClient();
+
+        // HttpClient replaces deprecated WebClient — connection pooling, async I/O, no thread blocking
+        private static readonly HttpClient Client = new HttpClient(new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (sender, cert, chain, errors) => true
+        });
+
         private static readonly InputManager InputManager = new InputManager();
         private static Process LeagueProcess = null;
 
         private static readonly Timer OrbWalkTimer = new Timer(100d / 3d);
 
-        private static bool OrbWalkerTimerActive = false;
+        private static volatile bool OrbWalkerTimerActive = false;
 
         private static string ActivePlayerName = string.Empty;
         private static string ChampionName = string.Empty;
@@ -56,11 +66,17 @@ namespace OddAutoWalker
         // This is honestly just semi-random because we need an interval to run the timer at
         private static readonly double OrderTickRate = 1d / 30d;
 
+        // Attack speed only changes on level-up or item purchase — 500ms is more than enough
+        private const int AttackSpeedPollIntervalMs = 500;
+
+        // High-resolution timer (~1μs precision vs ~15.6ms for DateTime.Now on Windows)
+        private static readonly Stopwatch PrecisionTimer = Stopwatch.StartNew();
+
 #if DEBUG
         private static int TimerCallbackCounter = 0;
 #endif
 
-        // These are all in seconds
+        // These are all in seconds (Stopwatch-based elapsed time)
         public static double GetSecondsPerAttack() => 1 / ClientAttackSpeed;
         public static double GetWindupDuration() => (((GetSecondsPerAttack() * ChampionAttackDelayPercent) - ChampionAttackCastTime) * ChampionAttackDelayScaling) + ChampionAttackCastTime;
         public static double GetBufferedWindupDuration() => GetWindupDuration() + WindupBuffer;
@@ -77,9 +93,6 @@ namespace OddAutoWalker
                 CurrentSettings.Load(SettingsFile);
             }
 
-            ServicePointManager.ServerCertificateValidationCallback += (sender, cert, chain, sslPolicyErrors) => true;
-            Client.Proxy = null;
-
             Console.Clear();
             Console.CursorVisible = false;
 
@@ -93,10 +106,9 @@ namespace OddAutoWalker
             callbackTimer.Elapsed += Timer_CallbackLog;
 #endif
 
-            Timer attackSpeedCacheTimer = new Timer(OrderTickRate);
-            attackSpeedCacheTimer.Elapsed += AttackSpeedCacheTimer_Elapsed;
+            // Async polling loop replaces 33ms timer — polls every 500ms via HttpClient async I/O
+            _ = Task.Run(AttackSpeedPollingLoopAsync);
 
-            attackSpeedCacheTimer.Start();
             Console.WriteLine($"Press and hold '{(VirtualKeyCode)CurrentSettings.ActivationKey}' to activate the Orb Walker");
 
             CheckLeagueProcess();
@@ -139,12 +151,15 @@ namespace OddAutoWalker
             }
         }
 
-        // When these DateTime instances are in the past, the action they gate can be taken
-        private static DateTime nextInput = default;
-        private static DateTime nextMove = default;
-        private static DateTime nextAttack = default;
+        // When these values are in the past (relative to PrecisionTimer), the action they gate can be taken
+        // Stored as elapsed seconds from Stopwatch for high-resolution comparison
+        private static double nextInput = 0;
+        private static double nextMove = 0;
+        private static double nextAttack = 0;
 
+#if DEBUG
         private static readonly Stopwatch owStopWatch = new Stopwatch();
+#endif
 
         private static void OrbWalkTimer_Elapsed(object sender, ElapsedEventArgs e)
         {
@@ -161,8 +176,8 @@ namespace OddAutoWalker
                 return;
             }
 
-            // Store time at timer tick start into a variable for readability
-            var time = e.SignalTime;
+            // High-resolution timestamp (~1μs precision vs ~15.6ms for DateTime.Now)
+            double time = PrecisionTimer.Elapsed.TotalSeconds;
 
             // Make sure we can send input without being dropped
             // This is used for gating movement orders when waiting for an attack to be prepared
@@ -176,30 +191,26 @@ namespace OddAutoWalker
                 if (nextAttack < time)
                 {
                     // Store current time + input delay so we're aware when we can move next
-                    nextInput = time.AddSeconds(MinInputDelay);
+                    nextInput = time + MinInputDelay;
 
-                    // Send attack input
-                    InputSimulator.Keyboard.KeyDown((ushort)DirectInputKeys.DIK_A);
-                    InputSimulator.Mouse.MouseClick(InputSimulator.Mouse.Buttons.Left);
-                    InputSimulator.Keyboard.KeyUp((ushort)DirectInputKeys.DIK_A);
+                    // Send attack input as single batched SendInput call (4 inputs → 1 syscall)
+                    InputSimulator.SendAttackClick((ushort)DirectInputKeys.DIK_A);
 
-                    // We've sent input now, so we're re-fetching time as I have no idea how long input takes
-                    // I'm assuming it's negligable, but why not
-                    // Please check what the actual difference is if you consider keeping this lol
-                    var attackTime = DateTime.Now;
+                    // High-resolution timestamp after input for precise next-attack scheduling
+                    double attackTime = PrecisionTimer.Elapsed.TotalSeconds;
 
                     // Store timings for when to next attack / move
-                    nextMove = attackTime.AddSeconds(GetBufferedWindupDuration());
-                    nextAttack = attackTime.AddSeconds(GetSecondsPerAttack());
+                    nextMove = attackTime + GetBufferedWindupDuration();
+                    nextAttack = attackTime + GetSecondsPerAttack();
                 }
                 // If we can't attack but we can move, do so
                 else if (nextMove < time)
                 {
                     // Store current time + input delay so we're aware when we can attack / move next
-                    nextInput = time.AddSeconds(MinInputDelay);
+                    nextInput = time + MinInputDelay;
 
-                    // Send move input
-                    InputSimulator.Mouse.MouseClick(InputSimulator.Mouse.Buttons.Right);
+                    // Send move input as single batched SendInput call (2 inputs → 1 syscall)
+                    InputSimulator.SendMoveClick();
                 }
             }
 #if DEBUG
@@ -215,6 +226,9 @@ namespace OddAutoWalker
                 LeagueProcess = Process.GetProcessesByName("League of Legends").FirstOrDefault();
                 if (LeagueProcess is null || LeagueProcess.HasExited)
                 {
+                    // Avoid busy-wait spin loop: process enumeration is a heavy WMI query,
+                    // no need to hammer it — game launch takes seconds, not milliseconds
+                    Thread.Sleep(2000);
                     continue;
                 }
                 HasProcess = true;
@@ -232,43 +246,67 @@ namespace OddAutoWalker
             CheckLeagueProcess();
         }
 
-        private static void AttackSpeedCacheTimer_Elapsed(object sender, ElapsedEventArgs e)
+        /// <summary>
+        /// Async polling loop for attack speed updates.
+        /// Replaces the 33ms System.Timers.Timer with a 500ms async loop:
+        /// - Attack speed only changes on level-up or item purchase
+        /// - Reduces HTTP calls from ~30/s to ~2/s
+        /// - Uses HttpClient async I/O instead of WebClient blocking calls
+        /// </summary>
+        private static async Task AttackSpeedPollingLoopAsync()
         {
-            if (HasProcess && !IsExiting && !IsIntializingValues && !IsUpdatingAttackValues)
+            while (!IsExiting)
             {
+                await Task.Delay(AttackSpeedPollIntervalMs);
+
+                if (!HasProcess || IsExiting || IsIntializingValues || IsUpdatingAttackValues)
+                    continue;
+
                 IsUpdatingAttackValues = true;
 
                 JToken activePlayerToken = null;
                 try
                 {
-                    activePlayerToken = JToken.Parse(Client.DownloadString(ActivePlayerEndpoint));
+                    string response = await Client.GetStringAsync(ActivePlayerEndpoint);
+                    activePlayerToken = JToken.Parse(response);
                 }
                 catch
                 {
                     IsUpdatingAttackValues = false;
-                    return;
+                    continue;
                 }
 
                 if (string.IsNullOrEmpty(ChampionName))
                 {
                     ActivePlayerName = activePlayerToken?["summonerName"].ToString();
                     IsIntializingValues = true;
-                    JToken playerListToken = JToken.Parse(Client.DownloadString(PlayerListEndpoint));
-                    foreach (JToken token in playerListToken)
+
+                    try
                     {
-                        if (token["summonerName"].ToString().Equals(ActivePlayerName))
+                        string playerListResponse = await Client.GetStringAsync(PlayerListEndpoint);
+                        JToken playerListToken = JToken.Parse(playerListResponse);
+                        foreach (JToken token in playerListToken)
                         {
-                            ChampionName = token["championName"].ToString();
-                            string[] rawNameArray = token["rawChampionName"].ToString().Split('_', StringSplitOptions.RemoveEmptyEntries);
-                            RawChampionName = rawNameArray[^1];
+                            if (token["summonerName"].ToString().Equals(ActivePlayerName))
+                            {
+                                ChampionName = token["championName"].ToString();
+                                string[] rawNameArray = token["rawChampionName"].ToString().Split('_', StringSplitOptions.RemoveEmptyEntries);
+                                RawChampionName = rawNameArray[^1];
+                            }
                         }
                     }
-
-                    if (!GetChampionBaseValues(RawChampionName))
+                    catch
                     {
                         IsIntializingValues = false;
                         IsUpdatingAttackValues = false;
-                        return;
+                        continue;
+                    }
+
+                    if (!await GetChampionBaseValuesAsync(RawChampionName))
+                    {
+                        IsIntializingValues = false;
+                        IsUpdatingAttackValues = false;
+                        continue;
                     }
 
 #if DEBUG
@@ -294,13 +332,14 @@ namespace OddAutoWalker
             }
         }
 
-        private static bool GetChampionBaseValues(string championName)
+        private static async Task<bool> GetChampionBaseValuesAsync(string championName)
         {
             string lowerChampionName = championName.ToLower();
             JToken championBinToken = null;
             try
             {
-                championBinToken = JToken.Parse(Client.DownloadString($"{ChampionStatsEndpoint}{lowerChampionName}/{lowerChampionName}.bin.json"));
+                string response = await Client.GetStringAsync($"{ChampionStatsEndpoint}{lowerChampionName}/{lowerChampionName}.bin.json");
+                championBinToken = JToken.Parse(response);
             }
             catch
             {
