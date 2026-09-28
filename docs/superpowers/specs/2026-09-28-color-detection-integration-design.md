@@ -34,17 +34,19 @@ Hai mode hoạt động qua 2 phím tắt, overlay debug tùy chọn.
 | Không detect | SendAttackClick (A-click nearest) — **vẫn** attack |
 | Trong windup delay | SendMoveClick (right-click move) |
 
-### Key Events
+### Key Events & Mode Resolution via Factory
 
 ```
-KeyDown(C)     → activeMode = Manual, start DetectionLoop + OrbWalkTimer
-KeyUp(C)       → activeMode = None,   stop all + clear overlay
+KeyDown(C)     → activeMode = Manual → _strategy = OrbWalkStrategyFactory.Create(OrbWalkMode.Manual)
+KeyUp(C)       → activeMode = None   → _strategy = null, stop all + clear overlay
 
-KeyDown(Space) → activeMode = Auto,   start DetectionLoop + OrbWalkTimer
-KeyUp(Space)   → activeMode = None,   stop all + clear overlay
+KeyDown(Space) → activeMode = Auto   → _strategy = OrbWalkStrategyFactory.Create(OrbWalkMode.Auto)
+KeyUp(Space)   → activeMode = None   → _strategy = null, stop all + clear overlay
 ```
 
 Nếu đang giữ 1 phím rồi nhấn phím kia → bỏ qua (chỉ 1 mode active tại 1 thời điểm).
+Việc phân xử logic tấn công của từng mode được đa hình hóa hoàn toàn thông qua `IOrbWalkStrategy` và `OrbWalkStrategyFactory`, loại bỏ toàn bộ `if-else` trong vòng lặp tick.
+
 
 ---
 
@@ -277,55 +279,113 @@ Dùng `SendInput` (không dùng `SetCursorPos` Win32) để tương thích với
 
 ---
 
-## 8. OrbWalkTimer_Elapsed (Modified Logic)
+## 8. Mode Factory & OrbWalk Execution
+Thay vì dùng `if-else` lồng nhau kiểm tra mode trong hot path 33ms, hệ thống áp dụng **Factory Method + Strategy Pattern**:
 
+### 8.1. Strategy Interface & Implementations
 ```csharp
-// Pseudocode
+namespace OddAutoWalker.Strategies
+{
+    public interface IOrbWalkStrategy
+    {
+        /// <summary>
+        /// Thực thi hành vi tấn công tùy theo mode.
+        /// Trả về true nếu đã thực hiện đòn đánh (để tính toán windup & next attack timing),
+        /// hoặc false nếu bỏ qua đòn đánh (để chờ tick tiếp theo hoặc right-click).
+        /// </summary>
+        bool TryAttack(bool hasTarget, int targetX, int targetY, ushort attackScancode);
+    }
+
+    /// <summary>
+    /// Manual Mode (Phím C): Chỉ tấn công khi phát hiện mục tiêu.
+    /// </summary>
+    public sealed class ManualOrbWalkStrategy : IOrbWalkStrategy
+    {
+        public bool TryAttack(bool hasTarget, int targetX, int targetY, ushort attackScancode)
+        {
+            if (!hasTarget) return false;
+
+            InputSimulator.SetCursorPosition(targetX, targetY);
+            InputSimulator.SendAttackClick(attackScancode);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Auto Mode (Phím Space): Tấn công liên tục. Nếu có mục tiêu thì focus vào mục tiêu, ngược lại vẫn A-click.
+    /// </summary>
+    public sealed class AutoOrbWalkStrategy : IOrbWalkStrategy
+    {
+        public bool TryAttack(bool hasTarget, int targetX, int targetY, ushort attackScancode)
+        {
+            if (hasTarget)
+            {
+                InputSimulator.SetCursorPosition(targetX, targetY);
+            }
+
+            InputSimulator.SendAttackClick(attackScancode);
+            return true;
+        }
+    }
+}
+```
+
+### 8.2. Strategy Factory
+```csharp
+namespace OddAutoWalker.Strategies
+{
+    public enum OrbWalkMode
+    {
+        None,
+        Manual,
+        Auto
+    }
+
+    public static class OrbWalkStrategyFactory
+    {
+        private static readonly IOrbWalkStrategy ManualStrategy = new ManualOrbWalkStrategy();
+        private static readonly IOrbWalkStrategy AutoStrategy = new AutoOrbWalkStrategy();
+
+        public static IOrbWalkStrategy? Create(OrbWalkMode mode) => mode switch
+        {
+            OrbWalkMode.Manual => ManualStrategy,
+            OrbWalkMode.Auto => AutoStrategy,
+            _ => null
+        };
+    }
+}
+```
+
+### 8.3. OrbWalkTimer_Elapsed (Clean Hot Path — Zero `if-else` for Modes)
+```csharp
 void OrbWalkTimer_Elapsed()
 {
     if (!HasProcess || IsExiting || !IsForeground) return;
 
     double time = PrecisionTimer.Elapsed.TotalSeconds;
     bool hasTarget = HasDetectedTarget;
-    int tx = Interlocked.Read(ref _targetX);  // atomic read
+    int tx = Interlocked.Read(ref _targetX);
     int ty = Interlocked.Read(ref _targetY);
 
-    if (true || nextInput < time)  // input gate (currently disabled)
+    var strategy = _currentStrategy;
+    if (strategy == null) return;
+
+    if (nextAttack < time)
     {
-        if (nextAttack < time)
-        {
-            nextInput = time + MinInputDelay;
+        nextInput = time + MinInputDelay;
 
-            if (activeMode == Mode.Manual)
-            {
-                if (hasTarget)
-                {
-                    InputSimulator.SetCursorPosition(tx, ty);
-                    InputSimulator.SendAttackClick(DIK_A);
-                }
-                // else: skip attack, fall through to move check below
-            }
-            else if (activeMode == Mode.Auto)
-            {
-                if (hasTarget)
-                {
-                    InputSimulator.SetCursorPosition(tx, ty);
-                }
-                InputSimulator.SendAttackClick(DIK_A);  // always attack
-            }
-
-            if (hasTarget || activeMode == Mode.Auto)
-            {
-                double attackTime = PrecisionTimer.Elapsed.TotalSeconds;
-                nextMove = attackTime + GetBufferedWindupDuration();
-                nextAttack = attackTime + GetSecondsPerAttack();
-            }
-        }
-        else if (nextMove < time)
+        // Đa hình hóa attack logic qua Strategy được sinh bởi Factory
+        if (strategy.TryAttack(hasTarget, tx, ty, DIK_A))
         {
-            nextInput = time + MinInputDelay;
-            InputSimulator.SendMoveClick();  // right-click move (both modes)
+            double attackTime = PrecisionTimer.Elapsed.TotalSeconds;
+            nextMove = attackTime + GetBufferedWindupDuration();
+            nextAttack = attackTime + GetSecondsPerAttack();
         }
+    }
+    else if (nextMove < time)
+    {
+        nextInput = time + MinInputDelay;
+        InputSimulator.SendMoveClick();  // right-click di chuyển trong lúc chờ đòn đánh
     }
 }
 ```
@@ -337,10 +397,15 @@ void OrbWalkTimer_Elapsed()
 | File | Change |
 |---|---|
 | `auto-kite.csproj` | `net10.0-windows`, AllowUnsafe, ProjectReference DetectColor, Single-File publish config |
-| `Program.cs` | 2 key handlers, detection loop, modified orb-walk logic, lazy init, AppContext.BaseDirectory for settings |
+| `Program.cs` | 2 key handlers, detection loop, active strategy lifecycle via Factory, AppContext.BaseDirectory for settings |
+| `Strategies/IOrbWalkStrategy.cs` | Interface cho mode execution |
+| `Strategies/ManualOrbWalkStrategy.cs` | Concrete strategy cho Manual mode |
+| `Strategies/AutoOrbWalkStrategy.cs` | Concrete strategy cho Auto mode |
+| `Strategies/OrbWalkStrategyFactory.cs` | Factory method khởi tạo singleton strategies |
 | `InputSimulator.cs` | Add `SetCursorPosition()` |
 | `Settings.cs` | Add all new config fields |
 | `DetectColor/` (new) | 10 new files: models, capture, detection, overlay, input |
+
 
 ---
 
