@@ -1,5 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
+using INPUT = OddAutoWalker.InputSimulator.Input;
+using MOUSEINPUT = OddAutoWalker.InputSimulator.MouseInput;
 
 namespace OddAutoWalker
 {
@@ -10,7 +12,20 @@ namespace OddAutoWalker
         private static extern uint SendInput(uint nInputs, Input[] pInputs, int cbSize);
 
         [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr GetMessageExtraInfo();
+        private static extern UIntPtr GetMessageExtraInfo();
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
+        private static class Win32
+        {
+            [DllImport("user32.dll")]
+            public static extern int GetSystemMetrics(int nIndex);
+        }
+
+        private const int INPUT_MOUSE = 0;
+        private const uint MOUSEEVENTF_MOVE = 0x0001;
+        private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
 
         // Cached — avoids reflection-based Marshal.SizeOf on every call
         private static readonly int InputSize = Marshal.SizeOf(typeof(Input));
@@ -61,14 +76,14 @@ namespace OddAutoWalker
             XUp = 0x0100
         }
 
-        private struct Input
+        internal struct Input
         {
             public int type;
             public InputUnion u;
         }
 
         [StructLayout(LayoutKind.Explicit)]
-        private struct InputUnion
+        internal struct InputUnion
         {
             [FieldOffset(0)] public MouseInput mi;
             [FieldOffset(0)] public KeyboardInput ki;
@@ -76,28 +91,28 @@ namespace OddAutoWalker
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct MouseInput
+        internal struct MouseInput
         {
-            public readonly int dx;
-            public readonly int dy;
+            public int dx;
+            public int dy;
             public uint mouseData;
             public uint dwFlags;
-            public readonly uint time;
-            public IntPtr dwExtraInfo;
+            public uint time;
+            public UIntPtr dwExtraInfo;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct KeyboardInput
+        internal struct KeyboardInput
         {
             public ushort wVk;
             public ushort wScan;
             public uint dwFlags;
-            public readonly uint time;
-            public IntPtr dwExtraInfo;
+            public uint time;
+            public UIntPtr dwExtraInfo;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct HardwareInput
+        internal struct HardwareInput
         {
             public readonly uint uMsg;
             public readonly ushort wParamL;
@@ -212,6 +227,38 @@ namespace OddAutoWalker
             };
 
             SendInput(2, inputs, InputSize);
+        }
+
+        /// <summary>
+        /// Moves the cursor to absolute screen coordinates using SendInput.
+        /// Normalized to 0..65535 as expected by MOUSEEVENTF_ABSOLUTE.
+        /// </summary>
+        public static void SetCursorPosition(int x, int y)
+        {
+            int screenWidth = Win32.GetSystemMetrics(0);  // SM_CXSCREEN
+            int screenHeight = Win32.GetSystemMetrics(1); // SM_CYSCREEN
+
+            int normX = (int)Math.Round(x * 65535.0 / (screenWidth - 1));
+            int normY = (int)Math.Round(y * 65535.0 / (screenHeight - 1));
+
+            INPUT input = new INPUT
+            {
+                type = INPUT_MOUSE,
+                u = new InputUnion
+                {
+                    mi = new MOUSEINPUT
+                    {
+                        dx = normX,
+                        dy = normY,
+                        dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+                        mouseData = 0,
+                        dwExtraInfo = UIntPtr.Zero,
+                        time = 0
+                    }
+                }
+            };
+
+            SendInput(1, new[] { input }, InputSize);
         }
 
         public static class Keyboard
