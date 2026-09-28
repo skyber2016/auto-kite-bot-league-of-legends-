@@ -8,8 +8,14 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Timers;
-using Timer = System.Timers.Timer;
+using System.Drawing;
+using System.Collections.Generic;
+using DetectColor.Capture;
+using DetectColor.Detection;
+using DetectColor.Models;
+using DetectColor.Overlay;
+using DetectColor.Input;
+using OddAutoWalker.Strategies;
 
 namespace OddAutoWalker
 {
@@ -21,7 +27,7 @@ namespace OddAutoWalker
         private const string ActivePlayerEndpoint = @"https://127.0.0.1:2999/liveclientdata/activeplayer";
         private const string PlayerListEndpoint = @"https://127.0.0.1:2999/liveclientdata/playerlist";
         private const string ChampionStatsEndpoint = @"https://raw.communitydragon.org/latest/game/data/characters/";
-        private const string SettingsFile = @"settings\settings.json";
+        private static readonly string SettingsFile = Path.Combine(AppContext.BaseDirectory, "settings", "settings.json");
 
         // Thread-safe flags — volatile ensures cross-thread visibility
         private static volatile bool HasProcess = false;
@@ -40,10 +46,6 @@ namespace OddAutoWalker
         private static readonly InputManager InputManager = new InputManager();
         private static Process LeagueProcess = null;
 
-        private static readonly Timer OrbWalkTimer = new Timer(100d / 3d);
-
-        private static volatile bool OrbWalkerTimerActive = false;
-
         private static string ActivePlayerName = string.Empty;
         private static string ChampionName = string.Empty;
         private static string RawChampionName = string.Empty;
@@ -55,37 +57,39 @@ namespace OddAutoWalker
         private static double ChampionAttackDelayPercent = 0.3;
         private static double ChampionAttackDelayScaling = 1.0;
 
-        /// <summary>
-        /// This is a buffer to prevent you from accidentally canceling your auto-attack too soon, as a result of fps, ping, or otherwise.
-        /// </summary>
-        private static readonly double WindupBuffer = 1d / 15d;
-
-        // If we're trying to input faster than this, don't
-        private static readonly double MinInputDelay = 1d / 30d;
-
-        // This is honestly just semi-random because we need an interval to run the timer at
-        private static readonly double OrderTickRate = 1d / 30d;
-
-        // Attack speed only changes on level-up or item purchase — 500ms is more than enough
-        private const int AttackSpeedPollIntervalMs = 500;
-
         // High-resolution timer (~1μs precision vs ~15.6ms for DateTime.Now on Windows)
         private static readonly Stopwatch PrecisionTimer = Stopwatch.StartNew();
 
-#if DEBUG
-        private static int TimerCallbackCounter = 0;
-#endif
+        private static volatile bool HasDetectedTarget = false;
+        private static int _targetX;
+        private static int _targetY;
+
+        private static IOrbWalkStrategy? _currentStrategy;
+        private static OrbWalkMode _currentMode = OrbWalkMode.None;
+        private static CancellationTokenSource? _activeLoopCts;
+
+        private static DxgiCapturer? _capturer;
+        private static ColorMatcher? _colorMatcher;
+        private static ClusterFinder? _clusterFinder;
+        private static OverlayWindow? _overlayWindow;
+        private static OverlayRenderer? _overlayRenderer;
+
+        // When these values are in the past (relative to PrecisionTimer), the action they gate can be taken
+        // Stored as elapsed seconds from Stopwatch for high-resolution comparison
+        private static double nextInput = 0;
+        private static double nextMove = 0;
+        private static double nextAttack = 0;
 
         // These are all in seconds (Stopwatch-based elapsed time)
         public static double GetSecondsPerAttack() => 1 / ClientAttackSpeed;
         public static double GetWindupDuration() => (((GetSecondsPerAttack() * ChampionAttackDelayPercent) - ChampionAttackCastTime) * ChampionAttackDelayScaling) + ChampionAttackCastTime;
-        public static double GetBufferedWindupDuration() => GetWindupDuration() + WindupBuffer;
+        public static double GetBufferedWindupDuration() => GetWindupDuration() + (CurrentSettings.WindupBufferMs / 1000.0);
 
-        public static void Main(string[] args)
+        public static async Task Main(string[] args)
         {
             if (!File.Exists(SettingsFile))
             {
-                Directory.CreateDirectory("settings");
+                Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile));
                 CurrentSettings.CreateNew(SettingsFile);
             }
             else
@@ -100,33 +104,18 @@ namespace OddAutoWalker
             InputManager.OnKeyboardEvent += InputManager_OnKeyboardEvent;
             InputManager.OnMouseEvent += InputManager_OnMouseEvent;
 
-            OrbWalkTimer.Elapsed += OrbWalkTimer_Elapsed;
-#if DEBUG
-            Timer callbackTimer = new Timer(16.66);
-            callbackTimer.Elapsed += Timer_CallbackLog;
-#endif
+            // Async polling loop replaces 33ms timer
+            _ = Task.Run(() => AttackSpeedPollingLoopAsync());
 
-            // Async polling loop replaces 33ms timer — polls every 500ms via HttpClient async I/O
-            _ = Task.Run(AttackSpeedPollingLoopAsync);
+            Console.WriteLine($"[Manual Mode] Hold '{(VirtualKeyCode)CurrentSettings.ManualKey}': Attack only when detected target");
+            Console.WriteLine($"[Auto Mode]   Hold '{(VirtualKeyCode)CurrentSettings.AutoKey}': Always attack (focus detected target)");
 
-            Console.WriteLine($"Press and hold '{(VirtualKeyCode)CurrentSettings.ActivationKey}' to activate the Orb Walker");
-
-            CheckLeagueProcess();
+            await CheckLeagueProcessAsync(CancellationToken.None);
 
             Console.ReadLine();
+            IsExiting = true;
+            StopMode();
         }
-
-#if DEBUG
-        private static void Timer_CallbackLog(object sender, ElapsedEventArgs e)
-        {
-            if (TimerCallbackCounter > 1 || TimerCallbackCounter < 0)
-            {
-                Console.Clear();
-                Console.WriteLine("Timer Error Detected");
-                throw new Exception("Timers must not run simultaneously");
-            }
-        }
-#endif
 
         private static void InputManager_OnMouseEvent(VirtualKeyCode key, KeyState state, int x, int y)
         {
@@ -134,101 +123,73 @@ namespace OddAutoWalker
 
         private static void InputManager_OnKeyboardEvent(VirtualKeyCode key, KeyState state)
         {
-            if (key == (VirtualKeyCode)CurrentSettings.ActivationKey)
+            if (state == KeyState.Down)
             {
-                switch (state)
+                if (_currentMode == OrbWalkMode.None)
                 {
-                    case KeyState.Down when !OrbWalkerTimerActive:
-                        OrbWalkerTimerActive = true;
-                        OrbWalkTimer.Start();
-                        break;
-
-                    case KeyState.Up when OrbWalkerTimerActive:
-                        OrbWalkerTimerActive = false;
-                        OrbWalkTimer.Stop();
-                        break;
+                    if (key == (VirtualKeyCode)CurrentSettings.ManualKey)
+                    {
+                        StartMode(OrbWalkMode.Manual);
+                    }
+                    else if (key == (VirtualKeyCode)CurrentSettings.AutoKey)
+                    {
+                        StartMode(OrbWalkMode.Auto);
+                    }
+                }
+            }
+            else if (state == KeyState.Up)
+            {
+                if (key == (VirtualKeyCode)CurrentSettings.ManualKey && _currentMode == OrbWalkMode.Manual)
+                {
+                    StopMode();
+                }
+                else if (key == (VirtualKeyCode)CurrentSettings.AutoKey && _currentMode == OrbWalkMode.Auto)
+                {
+                    StopMode();
                 }
             }
         }
 
-        // When these values are in the past (relative to PrecisionTimer), the action they gate can be taken
-        // Stored as elapsed seconds from Stopwatch for high-resolution comparison
-        private static double nextInput = 0;
-        private static double nextMove = 0;
-        private static double nextAttack = 0;
-
-#if DEBUG
-        private static readonly Stopwatch owStopWatch = new Stopwatch();
-#endif
-
-        private static void OrbWalkTimer_Elapsed(object sender, ElapsedEventArgs e)
+        private static void StartMode(OrbWalkMode mode)
         {
-#if DEBUG
-            owStopWatch.Start();
-            TimerCallbackCounter++;
-#endif
-            if (!HasProcess || IsExiting || GetForegroundWindow() != LeagueProcess.MainWindowHandle)
-            {
-#if DEBUG
-                TimerCallbackCounter--;
-#endif
+            _currentMode = mode;
+            _currentStrategy = OrbWalkStrategyFactory.Create(mode);
 
-                return;
+            _capturer ??= new DxgiCapturer();
+            _colorMatcher ??= new ColorMatcher();
+            _clusterFinder ??= new ClusterFinder();
+            if (CurrentSettings.EnableOverlay && _overlayWindow == null)
+            {
+                _overlayWindow = new OverlayWindow();
+                _overlayRenderer = new OverlayRenderer();
+                _overlayWindow.Show();
+                _overlayRenderer.Start(_overlayWindow.Hwnd);
             }
 
-            // High-resolution timestamp (~1μs precision vs ~15.6ms for DateTime.Now)
-            double time = PrecisionTimer.Elapsed.TotalSeconds;
-
-            // Make sure we can send input without being dropped
-            // This is used for gating movement orders when waiting for an attack to be prepared
-            // This is not needed if this function is not ran frequently enough for it to matter
-            // If it isn't, you might end up with this timer and this function's timer being out of sync
-            //   resulting in a (worst-case) OrderTickRate + MinInputDelay delay
-            // It is currently disabled due to this, enable it if you want/need to
-            if (true || nextInput < time)
-            {
-                // If we can attack, do so
-                if (nextAttack < time)
-                {
-                    // Store current time + input delay so we're aware when we can move next
-                    nextInput = time + MinInputDelay;
-
-                    // Send attack input as single batched SendInput call (4 inputs → 1 syscall)
-                    InputSimulator.SendAttackClick((ushort)DirectInputKeys.DIK_A);
-
-                    // High-resolution timestamp after input for precise next-attack scheduling
-                    double attackTime = PrecisionTimer.Elapsed.TotalSeconds;
-
-                    // Store timings for when to next attack / move
-                    nextMove = attackTime + GetBufferedWindupDuration();
-                    nextAttack = attackTime + GetSecondsPerAttack();
-                }
-                // If we can't attack but we can move, do so
-                else if (nextMove < time)
-                {
-                    // Store current time + input delay so we're aware when we can attack / move next
-                    nextInput = time + MinInputDelay;
-
-                    // Send move input as single batched SendInput call (2 inputs → 1 syscall)
-                    InputSimulator.SendMoveClick();
-                }
-            }
-#if DEBUG
-            TimerCallbackCounter--;
-            owStopWatch.Reset();
-#endif
+            _activeLoopCts = new CancellationTokenSource();
+            _ = Task.Run(() => DetectionLoopAsync(_activeLoopCts.Token));
+            _ = Task.Run(() => OrbWalkLoopAsync(_activeLoopCts.Token));
         }
 
-        private static void CheckLeagueProcess()
+        private static void StopMode()
         {
-            while (LeagueProcess is null || !HasProcess)
+            _currentMode = OrbWalkMode.None;
+            _currentStrategy = null;
+            HasDetectedTarget = false;
+            _activeLoopCts?.Cancel();
+            _activeLoopCts?.Dispose();
+            _activeLoopCts = null;
+            _overlayRenderer?.Clear();
+        }
+
+        private static async Task CheckLeagueProcessAsync(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested && (LeagueProcess is null || !HasProcess))
             {
                 LeagueProcess = Process.GetProcessesByName("League of Legends").FirstOrDefault();
                 if (LeagueProcess is null || LeagueProcess.HasExited)
                 {
-                    // Avoid busy-wait spin loop: process enumeration is a heavy WMI query,
-                    // no need to hammer it — game launch takes seconds, not milliseconds
-                    Thread.Sleep(2000);
+                    await Task.Delay(2000, ct);
                     continue;
                 }
                 HasProcess = true;
@@ -241,23 +202,139 @@ namespace OddAutoWalker
         {
             HasProcess = false;
             LeagueProcess = null;
-            //Console.Clear();
             Console.WriteLine("League Process Exited");
-            CheckLeagueProcess();
+            _ = CheckLeagueProcessAsync(CancellationToken.None);
         }
 
-        /// <summary>
-        /// Async polling loop for attack speed updates.
-        /// Replaces the 33ms System.Timers.Timer with a 500ms async loop:
-        /// - Attack speed only changes on level-up or item purchase
-        /// - Reduces HTTP calls from ~30/s to ~2/s
-        /// - Uses HttpClient async I/O instead of WebClient blocking calls
-        /// </summary>
+        private static async Task DetectionLoopAsync(CancellationToken ct)
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(1000.0 / Math.Max(1, CurrentSettings.DetectionFpsCap)));
+            Color targetColor = Color.FromArgb(CurrentSettings.TargetColorR, CurrentSettings.TargetColorG, CurrentSettings.TargetColorB);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(ct))
+                {
+                    if (_capturer == null || _colorMatcher == null || _clusterFinder == null) continue;
+
+                    var cursor = MouseHelper.GetCursorPosition();
+                    var capture = _capturer.Capture(cursor.X, cursor.Y, CurrentSettings.CaptureSize);
+                    if (capture.IsEmpty)
+                    {
+                        HasDetectedTarget = false;
+                        continue;
+                    }
+
+                    if (CurrentSettings.EnableOverlay && _overlayRenderer != null)
+                    {
+                        _overlayRenderer.SetScanRegion(new Rectangle(capture.ScreenX, capture.ScreenY, capture.Width, capture.Height));
+                    }
+
+                    var matches = _colorMatcher.FindPixels(capture, targetColor, CurrentSettings.ColorTolerance);
+                    var clusters = _clusterFinder.FindClusters(matches, capture.Width, capture.Height, capture.ScreenX, capture.ScreenY, CurrentSettings.MinClusterPixels);
+
+                    if (clusters.Count > 0)
+                    {
+                        // Select cluster closest to cursor
+                        ColorCluster best = clusters[0];
+                        double bestDistSq = double.MaxValue;
+                        foreach (var c in clusters)
+                        {
+                            int dx = c.Center.X - cursor.X;
+                            int dy = c.Center.Y - cursor.Y;
+                            double distSq = dx * dx + dy * dy;
+                            if (distSq < bestDistSq)
+                            {
+                                bestDistSq = distSq;
+                                best = c;
+                            }
+                        }
+
+                        Interlocked.Exchange(ref _targetX, best.Center.X);
+                        Interlocked.Exchange(ref _targetY, best.Center.Y);
+                        HasDetectedTarget = true;
+                    }
+                    else
+                    {
+                        HasDetectedTarget = false;
+                    }
+
+                    if (CurrentSettings.EnableOverlay && _overlayRenderer != null)
+                    {
+                        var boxes = new List<DetectedBox>(clusters.Count);
+                        foreach (var cl in clusters)
+                        {
+                            boxes.Add(new DetectedBox
+                            {
+                                ScreenRect = cl.BoundingRect,
+                                BorderColor = Color.Lime,
+                                Label = $"{cl.PixelCount}px",
+                                DetectedAt = DateTime.UtcNow
+                            });
+                        }
+                        _overlayRenderer.SetBoxes(boxes);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DetectionLoop] Error: {ex.Message}");
+            }
+        }
+
+        private static async Task OrbWalkLoopAsync(CancellationToken ct)
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(Math.Max(1, CurrentSettings.OrbWalkTickRateMs)));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(ct))
+                {
+                    ExecuteOrbWalkTick();
+                }
+            }
+            catch (OperationCanceledException) { }
+        }
+
+        private static void ExecuteOrbWalkTick()
+        {
+            if (!HasProcess || IsExiting || LeagueProcess == null || GetForegroundWindow() != LeagueProcess.MainWindowHandle)
+            {
+                return;
+            }
+
+            var strategy = _currentStrategy;
+            if (strategy == null) return;
+
+            double time = PrecisionTimer.Elapsed.TotalSeconds;
+            bool hasTarget = HasDetectedTarget;
+            int tx = Interlocked.CompareExchange(ref _targetX, 0, 0);
+            int ty = Interlocked.CompareExchange(ref _targetY, 0, 0);
+
+            double minInputDelaySec = CurrentSettings.MinInputDelayMs / 1000.0;
+
+            if (nextAttack < time)
+            {
+                nextInput = time + minInputDelaySec;
+
+                if (strategy.TryAttack(hasTarget, tx, ty, (ushort)DirectInputKeys.DIK_A))
+                {
+                    double attackTime = PrecisionTimer.Elapsed.TotalSeconds;
+                    nextMove = attackTime + GetBufferedWindupDuration();
+                    nextAttack = attackTime + GetSecondsPerAttack();
+                }
+            }
+            else if (nextMove < time)
+            {
+                nextInput = time + minInputDelaySec;
+                InputSimulator.SendMoveClick();
+            }
+        }
+
         private static async Task AttackSpeedPollingLoopAsync()
         {
             while (!IsExiting)
             {
-                await Task.Delay(AttackSpeedPollIntervalMs);
+                await Task.Delay(CurrentSettings.AttackSpeedPollMs);
 
                 if (!HasProcess || IsExiting || IsIntializingValues || IsUpdatingAttackValues)
                     continue;
@@ -309,23 +386,8 @@ namespace OddAutoWalker
                         continue;
                     }
 
-#if DEBUG
-                    Console.Title = $"({ActivePlayerName}) {ChampionName}";
-#endif
-
                     IsIntializingValues = false;
                 }
-
-#if DEBUG
-                Console.SetCursorPosition(0, 0);
-                Console.WriteLine($"{owStopWatch.ElapsedMilliseconds}\n" +
-                    $"Attack Speed Ratio: {ChampionAttackSpeedRatio}\n" +
-                    $"Windup Percent: {ChampionAttackDelayPercent}\n" +
-                    $"Current AS: {ClientAttackSpeed:0.00####}\n" +
-                    $"Seconds Per Attack: {GetSecondsPerAttack():0.00####}\n" +
-                    $"Windup Duration: {GetWindupDuration():0.00####}s + {WindupBuffer}s delay\n" +
-                    $"Attack Down Time: {(GetSecondsPerAttack() - GetWindupDuration()):0.00####}s");
-#endif
 
                 ClientAttackSpeed = activePlayerToken["championStats"]["attackSpeed"].Value<double>();
                 IsUpdatingAttackValues = false;
