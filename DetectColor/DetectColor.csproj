@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>DetectColor</RootNamespace>
+    <AssemblyName>DetectColor</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.1" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.1" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.1" />
+    <PackageReference Include="Vortice.Mathematics" Version="2.0.0" />
+  </ItemGroup>
+
+</Project>
