@@ -97,6 +97,7 @@ auto-kite.sln
 - `net10.0` → `net10.0-windows` (required to reference DetectColor)
 - Add `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>`
 - Add `<ProjectReference Include="..\DetectColor\DetectColor.csproj" />`
+- Add Single-File Publish properties (`PublishSingleFile`, `SelfContained`, `IncludeNativeLibrariesForSelfExtract`, `EnableCompressionInSingleFile`, `PublishTrimmed=false`)
 
 ---
 
@@ -335,8 +336,48 @@ void OrbWalkTimer_Elapsed()
 
 | File | Change |
 |---|---|
-| `auto-kite.csproj` | `net10.0-windows`, AllowUnsafe, ProjectReference DetectColor |
-| `Program.cs` | 2 key handlers, detection loop, modified orb-walk logic, lazy init |
+| `auto-kite.csproj` | `net10.0-windows`, AllowUnsafe, ProjectReference DetectColor, Single-File publish config |
+| `Program.cs` | 2 key handlers, detection loop, modified orb-walk logic, lazy init, AppContext.BaseDirectory for settings |
 | `InputSimulator.cs` | Add `SetCursorPosition()` |
 | `Settings.cs` | Add all new config fields |
 | `DetectColor/` (new) | 10 new files: models, capture, detection, overlay, input |
+
+---
+
+## 10. Single-File Build & Publishing
+
+### Csproj Configuration (`auto-kite.csproj`)
+
+Cấu hình xuất bản single-file trực tiếp trong `auto-kite.csproj` để khi chạy lệnh publish sẽ đóng gói tất cả runtime, dependency DLLs (Vortice, LowLevelInput, Newtonsoft.Json) thành duy nhất 1 file `.exe`:
+
+```xml
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Single-File Publishing -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Tắt trimming để tránh lỗi reflection serialize/deserialize Newtonsoft.Json -->
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+```
+
+### Path Resolution trong Single-File
+Khi đóng gói Single-File executable, các đường dẫn tương đối (như `settings\settings.json`) không nên dựa vào `Environment.CurrentDirectory` (vì phụ thuộc vào thư mục gọi lệnh hoặc shortcut).
+Thay vào đó, sử dụng:
+```csharp
+private static readonly string SettingsFile = Path.Combine(AppContext.BaseDirectory, "settings", "settings.json");
+```
+Điều này đảm bảo file cấu hình `settings.json` luôn được đặt đúng cạnh file `.exe`.
+
+### Publish Command
+```bash
+dotnet publish auto-kite/auto-kite.csproj -c Release -r win-x64
+```
+**Output:** File duy nhất `auto-kite.exe` tại `auto-kite\bin\Release\net10.0-windows\win-x64\publish\auto-kite.exe` có thể mang đi chạy độc lập trên bất kỳ máy Windows x64 nào mà không cần cài đặt .NET runtime.
+
