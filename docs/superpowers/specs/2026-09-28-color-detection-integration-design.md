@@ -130,33 +130,84 @@ Từ danh sách clusters (sorted by pixel count descending), chọn **cluster c�
 
 ---
 
-## 5. Threading Model & Data Flow
+## 5. Threading Model, Async/Await Tasks & Data Flow
+
+Nhằm tối ưu hóa hiệu năng tối đa trên .NET 10, loại bỏ hiện tượng context-switching lãng phí do tạo quá nhiều dedicated OS threads và triệt tiêu race condition của timer cũ, hệ thống chuyển đổi sang mô hình **Async/Await Task kết hợp `PeriodicTimer`**:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        MAIN THREAD                              │
-│  LowLevelInput hooks → KeyDown/KeyUp → start/stop threads      │
+│  LowLevelInput hooks → KeyDown/KeyUp → CancellationTokenSource │
 └───────────┬─────────────────────────────────┬───────────────────┘
             │                                 │
-            ▼                                 ▼
+            ▼ (CancellationToken)             ▼ (CancellationToken)
 ┌───────────────────────┐    volatile     ┌───────────────────────┐
-│   DETECTION THREAD    │ ──────────────► │   ORBWALK TIMER       │
-│   (Task.Run, 60 FPS)  │  SharedTarget   │   (33ms tick)         │
-│                       │  int x, y       │                       │
-│   DXGI Capture (GPU)  │  bool hasTarget │   Read target         │
+│  DETECTION ASYNC TASK │ ──────────────► │  ORBWALK ASYNC TASK   │
+│  PeriodicTimer(60FPS) │  SharedTarget   │  PeriodicTimer(33ms)  │
+│  Zero thread pinning  │  int x, y       │  Non-overlapping tick │
+│                       │  bool hasTarget │  Zero GC allocation   │
+│   DXGI Capture (GPU)  │                 │   Read target         │
 │   ColorMatch  (CPU)   │                 │   SetCursorPos        │
 │   Cluster BFS (CPU)   │                 │   Attack / Move       │
 └───────────┬───────────┘                 └───────────────────────┘
-            │ if overlay
+            │ if overlay (CancellationToken)
             ▼
 ┌───────────────────────┐
-│   OVERLAY THREAD      │
-│   (STA, Direct2D)     │
-│   60 FPS render       │
+│ OVERLAY RENDER TASK   │
+│ PeriodicTimer(60FPS)  │
+│ Direct2D Draw Frame   │
+└───────────────────────┘
+            ▲ uses Hwnd
+┌───────────────────────┐
+│ OVERLAY WINDOW THREAD │
+│ (Dedicated OS STA)    │
+│ Win32 Message Loop    │
 └───────────────────────┘
 ```
 
-### Shared State
+### 5.1. Phân Tích Chuyển Đổi Sang Async/Await Task
+
+| Luồng | Hiện tại / Cũ | Chuyển đổi mới (.NET 10) | Lý do & Lợi ích hiệu năng |
+|---|---|---|---|
+| **Orb-Walk Loop** | `System.Timers.Timer` callback | `async Task OrbWalkLoopAsync(CancellationToken ct)` dùng `PeriodicTimer` | Triệt tiêu nguy cơ callback overlap nếu tick xử lý chậm; zero memory allocation mỗi tick; trả thread về ThreadPool khi đang delay |
+| **Detection Loop** | Dedicated `Thread` + `Thread.Sleep` | `async Task DetectionLoopAsync(CancellationToken ct)` dùng `PeriodicTimer(16.67ms)` | Khung hình 60 FPS chuẩn xác, không bị drift thời gian; không chiếm giữ cứng 1 OS thread |
+| **Overlay Render** | Dedicated `Thread` + `Thread.Sleep(16)` | `async Task RenderLoopAsync(CancellationToken ct)` dùng `PeriodicTimer(16.67ms)` | Direct2D render frame nhịp nhàng không block OS thread |
+| **League Process Check**| `while` + `Thread.Sleep(2000)` block Main | `async Task CheckLeagueProcessAsync(CancellationToken ct)` + `await Task.Delay` | Main loop hoàn toàn bất đồng bộ, không bao giờ bị nghẽn (unblocked) |
+| **Overlay Window** | Dedicated `Thread` (STA) | **Giữ nguyên dedicated STA Thread** | **Bắt buộc về mặt kiến trúc Win32**: Message loop (`GetMessageW`, `DispatchMessageW`, `WndProc`) có tính Thread-Affinity chặt chẽ với OS Thread tạo ra HWND. Không thể chuyển sang Task ThreadPool vì Task continuations nhảy đổi thread sẽ làm đóng băng hoặc hỏng message pump |
+
+### 5.2. Mẫu Triển Khai `PeriodicTimer` Chuẩn .NET 10
+
+```csharp
+private static CancellationTokenSource? _activeLoopCts;
+
+private static async Task DetectionLoopAsync(CancellationToken ct)
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(1000.0 / CurrentSettings.DetectionFpsCap));
+    try
+    {
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            // DXGI Capture -> Color Match -> Cluster -> Update Shared Target
+        }
+    }
+    catch (OperationCanceledException) { }
+}
+
+private static async Task OrbWalkLoopAsync(CancellationToken ct)
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(CurrentSettings.OrbWalkTickRateMs));
+    try
+    {
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            ExecuteOrbWalkTick();
+        }
+    }
+    catch (OperationCanceledException) { }
+}
+```
+
+### 5.3. Shared State & Cooperative Cancellation
 
 ```csharp
 private static volatile bool HasDetectedTarget = false;
@@ -164,21 +215,33 @@ private static int _targetX;  // Interlocked
 private static int _targetY;  // Interlocked
 ```
 
-1 writer (detection), 1 reader (orb-walk). Worst case: 1 frame stale (~16ms) — acceptable.
+Khi nhấn phím (`KeyDown`):
+1. Tạo `_activeLoopCts = new CancellationTokenSource()`.
+2. Khởi chạy song song `DetectionLoopAsync(_activeLoopCts.Token)` và `OrbWalkLoopAsync(_activeLoopCts.Token)`.
 
-### Resource Lifecycle
+Khi nhả phím (`KeyUp`):
+1. Gọi `_activeLoopCts?.Cancel(); _activeLoopCts?.Dispose();`.
+2. Cả 2 loop dừng ngay lập tức tại điểm chờ tick kế tiếp một cách an toàn và nhẹ nhàng.
+
+### 5.4. Resource Lifecycle
 
 ```
-App Start → CheckLeagueProcess()
+App Start → await CheckLeagueProcessAsync()
   → First KeyDown(C/Space):
-      Lazy init DxgiCapturer (keep alive until game exit)
-      Lazy init Overlay (if EnableOverlay, keep alive until game exit)
-  → KeyDown: start detection loop + orb-walk timer
-  → KeyUp:   stop detection loop + orb-walk timer + clear overlay boxes
+      Lazy init DxgiCapturer (giữ sống đến khi game thoát)
+      Lazy init Overlay (nếu EnableOverlay, giữ sống đến khi game thoát)
+  → KeyDown:
+      _activeLoopCts = new CancellationTokenSource();
+      _currentStrategy = OrbWalkStrategyFactory.Create(mode);
+      _ = DetectionLoopAsync(_activeLoopCts.Token);
+      _ = OrbWalkLoopAsync(_activeLoopCts.Token);
+  → KeyUp:
+      _activeLoopCts?.Cancel();
+      _currentStrategy = null;
+      overlayRenderer?.Clear();
   → Game exit: Dispose DxgiCapturer + Overlay + all resources
 ```
 
-Lazy init vì DXGI init cost ~50-100ms — chỉ tạo 1 lần, reuse.
 
 ---
 
