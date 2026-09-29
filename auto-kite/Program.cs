@@ -74,6 +74,9 @@ namespace OddAutoWalker
         private static OrbWalkMode _currentMode = OrbWalkMode.None;
         private static CancellationTokenSource? _activeLoopCts;
 
+        private static Point _lastTargetCenter;
+        private static bool _hasLastTarget = false;
+
         private static DxgiCapturer? _capturer;
         private static ColorMatcher? _colorMatcher;
         private static ClusterFinder? _clusterFinder;
@@ -84,7 +87,16 @@ namespace OddAutoWalker
         // These are all in seconds (Stopwatch-based elapsed time)
         public static double GetSecondsPerAttack() => 1 / ClientAttackSpeed;
         public static double GetWindupDuration() => (((GetSecondsPerAttack() * ChampionAttackDelayPercent) - ChampionAttackCastTime) * ChampionAttackDelayScaling) + ChampionAttackCastTime;
-        public static double GetBufferedWindupDuration() => GetWindupDuration() + (CurrentSettings.WindupBufferMs / 1000.0);
+        public static double GetBufferedWindupDuration()
+        {
+            double scaleFactor = ChampionAttackSpeedRatio / Math.Max(0.3, ClientAttackSpeed);
+            double adaptiveBufferMs = Math.Max(
+                CurrentSettings.MinWindupBufferMs,
+                CurrentSettings.WindupBufferMs * scaleFactor
+            );
+            double jitteredBufferMs = TimingJitter.ApplyPositive((int)adaptiveBufferMs, CurrentSettings.WindupJitterMs);
+            return GetWindupDuration() + (jitteredBufferMs / 1000.0);
+        }
 
         public static async Task Main(string[] args)
         {
@@ -121,6 +133,19 @@ namespace OddAutoWalker
             Console.WriteLine($"  Capture Size:   {CurrentSettings.CaptureSize}px");
             Console.WriteLine($"  Target Offset:  X={CurrentSettings.TargetOffsetX}, Y={CurrentSettings.TargetOffsetY}");
             Console.WriteLine($"  Overlay:        {(CurrentSettings.EnableOverlay ? "ON" : "OFF")}");
+            Console.WriteLine($"  Cursor Restore: {(CurrentSettings.EnableCursorRestore ? "ON" : "OFF")}");
+            Console.WriteLine($"  Smooth Cursor:  {(CurrentSettings.EnableSmoothCursor ? "ON" : "OFF")} ({CurrentSettings.CursorSteps} steps, {CurrentSettings.CursorMoveMs}ms)");
+            Console.WriteLine($"  Input Jitter:   ±{CurrentSettings.InputJitterMs}ms");
+            Console.WriteLine($"  Windup Jitter:  +0..{CurrentSettings.WindupJitterMs}ms");
+            Console.WriteLine($"  Key Hold:       {CurrentSettings.KeyHoldBaseMs}±{CurrentSettings.KeyHoldJitterMs}ms");
+            Console.WriteLine($"  Click Hold:     {CurrentSettings.ClickHoldBaseMs}±{CurrentSettings.ClickHoldJitterMs}ms");
+            Console.WriteLine($"  Attack Key:     0x{CurrentSettings.AttackMoveScancode:X2}");
+            Console.WriteLine($"  Min Windup:     {CurrentSettings.MinWindupBufferMs}ms");
+            Console.WriteLine($"  Kite Direction: {(CurrentSettings.AutoKiteDirection ? "ON" : "OFF")} ({CurrentSettings.KiteDistance}px)");
+            Console.WriteLine($"  Sticky Target:  {CurrentSettings.TargetStickyRadius}px");
+            Console.WriteLine($"  Skip Move:      {CurrentSettings.SkipMoveChance:P0}");
+            Console.WriteLine($"  Extra Move:     {CurrentSettings.ExtraMoveChance:P0}");
+            Console.WriteLine($"  ExtraInfo:      {CurrentSettings.ExtraInfoMode}");
             Console.WriteLine("----------------");
             Console.WriteLine();
 
@@ -195,6 +220,7 @@ namespace OddAutoWalker
             _currentMode = OrbWalkMode.None;
             _currentStrategy = null;
             HasDetectedTarget = false;
+            _hasLastTarget = false;
             _activeLoopCts?.Cancel();
             _activeLoopCts?.Dispose();
             _activeLoopCts = null;
@@ -253,22 +279,46 @@ namespace OddAutoWalker
 
                     if (clusters.Count > 0)
                     {
-                        // Select cluster closest to cursor
                         ColorCluster best = clusters[0];
                         double bestDistSq = double.MaxValue;
-                        foreach (var c in clusters)
+
+                        // Feature 8: Sticky Target
+                        bool foundSticky = false;
+                        if (_hasLastTarget)
                         {
-                            int dx = c.Center.X - cursor.X;
-                            int dy = c.Center.Y - cursor.Y;
-                            double distSq = dx * dx + dy * dy;
-                            if (distSq < bestDistSq)
+                            foreach (var c in clusters)
                             {
-                                bestDistSq = distSq;
-                                best = c;
+                                int sdx = c.Center.X - _lastTargetCenter.X;
+                                int sdy = c.Center.Y - _lastTargetCenter.Y;
+                                double stickyDistSq = sdx * sdx + sdy * sdy;
+                                int stickyRadius = CurrentSettings.TargetStickyRadius;
+                                if (stickyDistSq <= stickyRadius * stickyRadius)
+                                {
+                                    best = c;
+                                    foundSticky = true;
+                                    break;
+                                }
                             }
                         }
 
-                        // Apply offset: shift from detected color (e.g. health bar) to champion body
+                        if (!foundSticky)
+                        {
+                            foreach (var c in clusters)
+                            {
+                                int dx = c.Center.X - cursor.X;
+                                int dy = c.Center.Y - cursor.Y;
+                                double distSq = dx * dx + dy * dy;
+                                if (distSq < bestDistSq)
+                                {
+                                    bestDistSq = distSq;
+                                    best = c;
+                                }
+                            }
+                        }
+
+                        _lastTargetCenter = best.Center;
+                        _hasLastTarget = true;
+
                         int targetX = best.Center.X + CurrentSettings.TargetOffsetX;
                         int targetY = best.Center.Y + CurrentSettings.TargetOffsetY;
 
@@ -279,6 +329,7 @@ namespace OddAutoWalker
                     else
                     {
                         HasDetectedTarget = false;
+                        _hasLastTarget = false;
                     }
 
                     if (CurrentSettings.EnableOverlay && _overlayRenderer != null)
@@ -323,7 +374,6 @@ namespace OddAutoWalker
 
         private static async Task OrbWalkLoopAsync(CancellationToken ct)
         {
-            // Timing state is local — fresh start every activation, no cross-thread race
             double nextInput = 0, nextMove = 0, nextAttack = 0;
 
             using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(Math.Max(1, CurrentSettings.OrbWalkTickRateMs)));
@@ -331,46 +381,75 @@ namespace OddAutoWalker
             {
                 while (await timer.WaitForNextTickAsync(ct))
                 {
-                    ExecuteOrbWalkTick(ref nextInput, ref nextMove, ref nextAttack);
+                    if (!HasProcess || !HasAttackSpeedData || IsExiting || LeagueProcess == null || GetForegroundWindow() != LeagueProcess.MainWindowHandle)
+                        continue;
+
+                    var strategy = _currentStrategy;
+                    if (strategy == null) continue;
+
+                    double time = PrecisionTimer.Elapsed.TotalSeconds;
+                    bool hasTarget = HasDetectedTarget;
+                    int tx = Interlocked.CompareExchange(ref _targetX, 0, 0);
+                    int ty = Interlocked.CompareExchange(ref _targetY, 0, 0);
+
+                    // Attack phase: fire when cooldown is ready
+                    if (nextAttack <= time)
+                    {
+                        if (await strategy.TryAttackAsync(hasTarget, tx, ty, (ushort)CurrentSettings.AttackMoveScancode, CurrentSettings))
+                        {
+                            double attackTime = PrecisionTimer.Elapsed.TotalSeconds;
+                            nextMove = attackTime + GetBufferedWindupDuration();
+                            nextAttack = attackTime + GetSecondsPerAttack();
+                            continue;
+                        }
+                    }
+
+                    // Move phase: kite between attacks, throttled by MinInputDelayMs + jitter
+                    if (nextMove <= time && nextInput <= time)
+                    {
+                        // Feature 9: Pattern Scrambling
+                        double roll = TimingJitter.NextDouble();
+                        if (roll < CurrentSettings.SkipMoveChance)
+                        {
+                            nextInput = time + (TimingJitter.Apply(CurrentSettings.MinInputDelayMs, CurrentSettings.InputJitterMs) / 1000.0);
+                            continue;
+                        }
+
+                        // Feature 7: Kite Direction (Auto mode only)
+                        if (CurrentSettings.AutoKiteDirection && _currentMode == OrbWalkMode.Auto && hasTarget)
+                        {
+                            var cursor = DetectColor.Input.MouseHelper.GetCursorPosition();
+                            double dx = cursor.X - tx;
+                            double dy = cursor.Y - ty;
+                            double len = Math.Sqrt(dx * dx + dy * dy);
+                            if (len > 1)
+                            {
+                                int moveX = cursor.X + (int)(dx / len * CurrentSettings.KiteDistance);
+                                int moveY = cursor.Y + (int)(dy / len * CurrentSettings.KiteDistance);
+                                InputSimulator.SetCursorPosition(moveX, moveY);
+                            }
+                        }
+
+                        // Feature 4: Humanized move-click with hold duration
+                        InputSimulator.Mouse.MouseDown(InputSimulator.Mouse.Buttons.Right);
+                        await Task.Delay(TimingJitter.Apply(CurrentSettings.ClickHoldBaseMs, CurrentSettings.ClickHoldJitterMs));
+                        InputSimulator.Mouse.MouseUp(InputSimulator.Mouse.Buttons.Right);
+
+                        // Feature 9: Extra move chance
+                        if (roll > 1.0 - CurrentSettings.ExtraMoveChance)
+                        {
+                            await Task.Delay(TimingJitter.Apply(15, 10));
+                            InputSimulator.Mouse.MouseDown(InputSimulator.Mouse.Buttons.Right);
+                            await Task.Delay(TimingJitter.Apply(CurrentSettings.ClickHoldBaseMs, CurrentSettings.ClickHoldJitterMs));
+                            InputSimulator.Mouse.MouseUp(InputSimulator.Mouse.Buttons.Right);
+                        }
+
+                        // Feature 2: Jittered input delay
+                        nextInput = time + (TimingJitter.Apply(CurrentSettings.MinInputDelayMs, CurrentSettings.InputJitterMs) / 1000.0);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
-        }
-
-        private static void ExecuteOrbWalkTick(ref double nextInput, ref double nextMove, ref double nextAttack)
-        {
-            if (!HasProcess || !HasAttackSpeedData || IsExiting || LeagueProcess == null || GetForegroundWindow() != LeagueProcess.MainWindowHandle)
-            {
-                return;
-            }
-
-            var strategy = _currentStrategy;
-            if (strategy == null) return;
-
-            double time = PrecisionTimer.Elapsed.TotalSeconds;
-            bool hasTarget = HasDetectedTarget;
-            int tx = Interlocked.CompareExchange(ref _targetX, 0, 0);
-            int ty = Interlocked.CompareExchange(ref _targetY, 0, 0);
-
-            // Attack phase: fire when cooldown is ready
-            if (nextAttack <= time)
-            {
-                if (strategy.TryAttack(hasTarget, tx, ty, (ushort)DirectInputKeys.DIK_H))
-                {
-                    double attackTime = PrecisionTimer.Elapsed.TotalSeconds;
-                    nextMove = attackTime + GetBufferedWindupDuration();
-                    nextAttack = attackTime + GetSecondsPerAttack();
-                    return; // Attack fired — wait for windup before moving
-                }
-                // TryAttack skipped (no target in manual mode) — fall through to move
-            }
-
-            // Move phase: kite between attacks, throttled by MinInputDelayMs
-            if (nextMove <= time && nextInput <= time)
-            {
-                nextInput = time + (CurrentSettings.MinInputDelayMs / 1000.0);
-                InputSimulator.SendMoveClick();
-            }
         }
 
         private static async Task AttackSpeedPollingLoopAsync()
