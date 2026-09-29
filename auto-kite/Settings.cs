@@ -19,23 +19,27 @@ namespace OddAutoWalker
         public int ActivationKey { get => ManualKey; set => ManualKey = value; }
 
         // Target Color Detection (RGB)
-        public int TargetColorR { get; set; } = 255;
-        public int TargetColorG { get; set; } = 0;
+        public int TargetColorR { get; set; } = 52;
+        public int TargetColorG { get; set; } = 3;
         public int TargetColorB { get; set; } = 0;
-        public int ColorTolerance { get; set; } = 40;
+        public int ColorTolerance { get; set; } = 10;
 
         // Detection Area & Filtering
-        public int CaptureSize { get; set; } = 400;
+        public int CaptureSize { get; set; } = 1000;
         public int MinClusterPixels { get; set; } = 10;
         public int DetectionFpsCap { get; set; } = 60;
+
+        // Target Offset — shift from detected position (e.g. health bar) to champion body
+        public int TargetOffsetX { get; set; } = 70;
+        public int TargetOffsetY { get; set; } = 120;
 
         // Visual Overlay Debug
         public bool EnableOverlay { get; set; } = false;
 
         // Orb-Walk Timing parameters (ms)
         public int WindupBufferMs { get; set; } = 66;
-        public int MinInputDelayMs { get; set; } = 33;
-        public int OrbWalkTickRateMs { get; set; } = 33;
+        public int MinInputDelayMs { get; set; } = 75;
+        public int OrbWalkTickRateMs { get; set; } = 1;
         public int AttackSpeedPollMs { get; set; } = 500;
 
         public void CreateNew(string path)

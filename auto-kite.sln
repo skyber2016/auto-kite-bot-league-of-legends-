@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 16
-VisualStudioVersion = 16.0.30011.22
+# Visual Studio Version 18
+VisualStudioVersion = 18.4.11620.152 stable
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "auto-kite", "auto-kite\auto-kite.csproj", "{8DB8B104-5644-4664-B480-61ED35D9705B}"
 EndProject
@@ -12,6 +12,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DetectColor.Tests", "tests\DetectColor.Tests\DetectColor.Tests.csproj", "{427F5006-8E56-423C-8926-CADA20C9028E}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "auto-kite.Tests", "tests\auto-kite.Tests\auto-kite.Tests.csproj", "{5930F4BF-187D-4D39-A8EC-1871ACB4853B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LowLevelInput", "LowLevelInput.Net\Project\LowLevelInput\LowLevelInput.csproj", "{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -71,6 +73,18 @@ Global
 		{5930F4BF-187D-4D39-A8EC-1871ACB4853B}.Release|x64.Build.0 = Release|Any CPU
 		{5930F4BF-187D-4D39-A8EC-1871ACB4853B}.Release|x86.ActiveCfg = Release|Any CPU
 		{5930F4BF-187D-4D39-A8EC-1871ACB4853B}.Release|x86.Build.0 = Release|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Debug|x64.Build.0 = Debug|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Debug|x86.Build.0 = Debug|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Release|x64.ActiveCfg = Release|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Release|x64.Build.0 = Release|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Release|x86.ActiveCfg = Release|Any CPU
+		{229BE5E3-4F0A-5CA0-4E7C-974951E33AAB}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

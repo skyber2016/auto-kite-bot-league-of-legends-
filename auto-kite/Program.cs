@@ -25,6 +25,12 @@ namespace OddAutoWalker
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
+        [DllImport("winmm.dll")]
+        private static extern uint timeBeginPeriod(uint uMilliseconds);
+
+        [DllImport("winmm.dll")]
+        private static extern uint timeEndPeriod(uint uMilliseconds);
+
         private const string ActivePlayerEndpoint = @"https://127.0.0.1:2999/liveclientdata/activeplayer";
         private const string PlayerListEndpoint = @"https://127.0.0.1:2999/liveclientdata/playerlist";
         private const string ChampionStatsEndpoint = @"https://raw.communitydragon.org/latest/game/data/characters/";
@@ -33,8 +39,6 @@ namespace OddAutoWalker
         // Thread-safe flags — volatile ensures cross-thread visibility
         private static volatile bool HasProcess = false;
         private static volatile bool IsExiting = false;
-        private static volatile bool IsIntializingValues = false;
-        private static volatile bool IsUpdatingAttackValues = false;
 
         private static readonly Settings CurrentSettings = new Settings();
 
@@ -52,6 +56,7 @@ namespace OddAutoWalker
         private static string RawChampionName = string.Empty;
 
         private static double ClientAttackSpeed = 0.625;
+        private static volatile bool HasAttackSpeedData = false;
         private static double ChampionAttackCastTime = 0.625;
         private static double ChampionAttackTotalTime = 0.625;
         private static double ChampionAttackSpeedRatio = 0.625;
@@ -75,11 +80,6 @@ namespace OddAutoWalker
         private static OverlayWindow? _overlayWindow;
         private static OverlayRenderer? _overlayRenderer;
 
-        // When these values are in the past (relative to PrecisionTimer), the action they gate can be taken
-        // Stored as elapsed seconds from Stopwatch for high-resolution comparison
-        private static double nextInput = 0;
-        private static double nextMove = 0;
-        private static double nextAttack = 0;
 
         // These are all in seconds (Stopwatch-based elapsed time)
         public static double GetSecondsPerAttack() => 1 / ClientAttackSpeed;
@@ -88,6 +88,7 @@ namespace OddAutoWalker
 
         public static async Task Main(string[] args)
         {
+#if !DEBUG
             if (!File.Exists(SettingsFile))
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile));
@@ -97,25 +98,42 @@ namespace OddAutoWalker
             {
                 CurrentSettings.Load(SettingsFile);
             }
-
+#endif
             Console.Clear();
             Console.CursorVisible = false;
+
+            // Raise Windows timer resolution to 1ms (default is 15.6ms)
+            timeBeginPeriod(1);
 
             InputManager.Initialize();
             InputManager.OnKeyboardEvent += InputManager_OnKeyboardEvent;
             InputManager.OnMouseEvent += InputManager_OnMouseEvent;
 
-            // Async polling loop replaces 33ms timer
-            _ = Task.Run(() => AttackSpeedPollingLoopAsync());
-
             Console.WriteLine($"[Manual Mode] Hold '{(VirtualKeyCode)CurrentSettings.ManualKey}': Attack only when detected target");
             Console.WriteLine($"[Auto Mode]   Hold '{(VirtualKeyCode)CurrentSettings.AutoKey}': Always attack (focus detected target)");
+            Console.WriteLine();
+            Console.WriteLine("--- Settings ---");
+            Console.WriteLine($"  Tick Rate:      {CurrentSettings.OrbWalkTickRateMs}ms");
+            Console.WriteLine($"  Move Delay:     {CurrentSettings.MinInputDelayMs}ms");
+            Console.WriteLine($"  Windup Buffer:  {CurrentSettings.WindupBufferMs}ms");
+            Console.WriteLine($"  AS Poll:        {CurrentSettings.AttackSpeedPollMs}ms");
+            Console.WriteLine($"  Target Color:   RGB({CurrentSettings.TargetColorR}, {CurrentSettings.TargetColorG}, {CurrentSettings.TargetColorB}) ±{CurrentSettings.ColorTolerance}");
+            Console.WriteLine($"  Capture Size:   {CurrentSettings.CaptureSize}px");
+            Console.WriteLine($"  Target Offset:  X={CurrentSettings.TargetOffsetX}, Y={CurrentSettings.TargetOffsetY}");
+            Console.WriteLine($"  Overlay:        {(CurrentSettings.EnableOverlay ? "ON" : "OFF")}");
+            Console.WriteLine("----------------");
+            Console.WriteLine();
 
             await CheckLeagueProcessAsync(CancellationToken.None);
+            Console.WriteLine("[OK] League process found — starting attack speed polling...");
+
+            // Start polling AFTER process found — avoids wasted iterations
+            _ = Task.Run(() => AttackSpeedPollingLoopAsync());
 
             Console.ReadLine();
             IsExiting = true;
             StopMode();
+            timeEndPeriod(1);
         }
 
         private static void InputManager_OnMouseEvent(VirtualKeyCode key, KeyState state, int x, int y)
@@ -250,8 +268,12 @@ namespace OddAutoWalker
                             }
                         }
 
-                        Interlocked.Exchange(ref _targetX, best.Center.X);
-                        Interlocked.Exchange(ref _targetY, best.Center.Y);
+                        // Apply offset: shift from detected color (e.g. health bar) to champion body
+                        int targetX = best.Center.X + CurrentSettings.TargetOffsetX;
+                        int targetY = best.Center.Y + CurrentSettings.TargetOffsetY;
+
+                        Interlocked.Exchange(ref _targetX, targetX);
+                        Interlocked.Exchange(ref _targetY, targetY);
                         HasDetectedTarget = true;
                     }
                     else
@@ -261,7 +283,7 @@ namespace OddAutoWalker
 
                     if (CurrentSettings.EnableOverlay && _overlayRenderer != null)
                     {
-                        var boxes = new List<DetectedBox>(clusters.Count);
+                        var boxes = new List<DetectedBox>(clusters.Count + 1);
                         foreach (var cl in clusters)
                         {
                             boxes.Add(new DetectedBox
@@ -272,6 +294,22 @@ namespace OddAutoWalker
                                 DetectedAt = DateTime.UtcNow
                             });
                         }
+
+                        // Draw crosshair at actual target position (after offset)
+                        if (HasDetectedTarget)
+                        {
+                            int tx = Interlocked.CompareExchange(ref _targetX, 0, 0);
+                            int ty = Interlocked.CompareExchange(ref _targetY, 0, 0);
+                            int markerSize = 20;
+                            boxes.Add(new DetectedBox
+                            {
+                                ScreenRect = new Rectangle(tx - markerSize / 2, ty - markerSize / 2, markerSize, markerSize),
+                                BorderColor = Color.Red,
+                                Label = "TARGET",
+                                DetectedAt = DateTime.UtcNow
+                            });
+                        }
+
                         _overlayRenderer.SetBoxes(boxes);
                     }
                 }
@@ -285,20 +323,23 @@ namespace OddAutoWalker
 
         private static async Task OrbWalkLoopAsync(CancellationToken ct)
         {
+            // Timing state is local — fresh start every activation, no cross-thread race
+            double nextInput = 0, nextMove = 0, nextAttack = 0;
+
             using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(Math.Max(1, CurrentSettings.OrbWalkTickRateMs)));
             try
             {
                 while (await timer.WaitForNextTickAsync(ct))
                 {
-                    ExecuteOrbWalkTick();
+                    ExecuteOrbWalkTick(ref nextInput, ref nextMove, ref nextAttack);
                 }
             }
             catch (OperationCanceledException) { }
         }
 
-        private static void ExecuteOrbWalkTick()
+        private static void ExecuteOrbWalkTick(ref double nextInput, ref double nextMove, ref double nextAttack)
         {
-            if (!HasProcess || IsExiting || LeagueProcess == null || GetForegroundWindow() != LeagueProcess.MainWindowHandle)
+            if (!HasProcess || !HasAttackSpeedData || IsExiting || LeagueProcess == null || GetForegroundWindow() != LeagueProcess.MainWindowHandle)
             {
                 return;
             }
@@ -311,22 +352,23 @@ namespace OddAutoWalker
             int tx = Interlocked.CompareExchange(ref _targetX, 0, 0);
             int ty = Interlocked.CompareExchange(ref _targetY, 0, 0);
 
-            double minInputDelaySec = CurrentSettings.MinInputDelayMs / 1000.0;
-
-            if (nextAttack < time)
+            // Attack phase: fire when cooldown is ready
+            if (nextAttack <= time)
             {
-                nextInput = time + minInputDelaySec;
-
-                if (strategy.TryAttack(hasTarget, tx, ty, (ushort)DirectInputKeys.DIK_A))
+                if (strategy.TryAttack(hasTarget, tx, ty, (ushort)DirectInputKeys.DIK_H))
                 {
                     double attackTime = PrecisionTimer.Elapsed.TotalSeconds;
                     nextMove = attackTime + GetBufferedWindupDuration();
                     nextAttack = attackTime + GetSecondsPerAttack();
+                    return; // Attack fired — wait for windup before moving
                 }
+                // TryAttack skipped (no target in manual mode) — fall through to move
             }
-            else if (nextMove < time)
+
+            // Move phase: kite between attacks, throttled by MinInputDelayMs
+            if (nextMove <= time && nextInput <= time)
             {
-                nextInput = time + minInputDelaySec;
+                nextInput = time + (CurrentSettings.MinInputDelayMs / 1000.0);
                 InputSimulator.SendMoveClick();
             }
         }
@@ -335,116 +377,171 @@ namespace OddAutoWalker
         {
             while (!IsExiting)
             {
-                await Task.Delay(CurrentSettings.AttackSpeedPollMs);
-
-                if (!HasProcess || IsExiting || IsIntializingValues || IsUpdatingAttackValues)
+                if (!HasProcess || IsExiting)
+                {
+                    await Task.Delay(CurrentSettings.AttackSpeedPollMs);
                     continue;
+                }
 
-                IsUpdatingAttackValues = true;
-
-                JToken activePlayerToken = null;
                 try
                 {
                     string response = await Client.GetStringAsync(ActivePlayerEndpoint);
-                    activePlayerToken = JToken.Parse(response);
-                }
-                catch
-                {
-                    IsUpdatingAttackValues = false;
-                    continue;
-                }
+                    JToken activePlayerToken = JToken.Parse(response);
 
-                if (string.IsNullOrEmpty(ChampionName))
-                {
-                    ActivePlayerName = activePlayerToken?["summonerName"].ToString();
-                    IsIntializingValues = true;
-
-                    try
+                    // Champion init — non-blocking: if this fails, we still read attack speed below
+                    if (string.IsNullOrEmpty(ChampionName))
                     {
-                        string playerListResponse = await Client.GetStringAsync(PlayerListEndpoint);
-                        JToken playerListToken = JToken.Parse(playerListResponse);
-                        foreach (JToken token in playerListToken)
+                        try
                         {
-                            if (token["summonerName"].ToString().Equals(ActivePlayerName))
+                            ActivePlayerName = activePlayerToken?["riotIdGameName"]?.ToString()
+                                            ?? activePlayerToken?["summonerName"]?.ToString()
+                                            ?? string.Empty;
+
+                            string playerListResponse = await Client.GetStringAsync(PlayerListEndpoint);
+                            JToken playerListToken = JToken.Parse(playerListResponse);
+                            foreach (JToken token in playerListToken)
                             {
-                                ChampionName = token["championName"].ToString();
-                                string[] rawNameArray = token["rawChampionName"].ToString().Split('_', StringSplitOptions.RemoveEmptyEntries);
-                                RawChampionName = rawNameArray[^1];
+                                string tokenName = token["riotIdGameName"]?.ToString()
+                                                ?? token["summonerName"]?.ToString()
+                                                ?? string.Empty;
+                                if (tokenName.Equals(ActivePlayerName))
+                                {
+                                    ChampionName = token["championName"]?.ToString() ?? string.Empty;
+                                    string[] rawNameArray = (token["rawChampionName"]?.ToString() ?? string.Empty).Split('_', StringSplitOptions.RemoveEmptyEntries);
+                                    RawChampionName = rawNameArray[^1];
+                                }
+                            }
+
+                            if (!string.IsNullOrEmpty(RawChampionName) && await GetChampionBaseValuesAsync(RawChampionName))
+                            {
+                                Console.WriteLine($"[OK] Champion: {ChampionName}");
+                                Console.WriteLine($"  AS Ratio:       {ChampionAttackSpeedRatio:F4}");
+                                Console.WriteLine($"  Delay%:         {ChampionAttackDelayPercent:F4}");
+                                Console.WriteLine($"  Delay Scaling:  {ChampionAttackDelayScaling:F4}");
+                                Console.WriteLine($"  Cast Time:      {ChampionAttackCastTime:F4}s");
+                                Console.WriteLine($"  Total Time:     {ChampionAttackTotalTime:F4}s");
+                            }
+                            else
+                            {
+                                ChampionName = string.Empty; // Retry next poll
                             }
                         }
-                    }
-                    catch
-                    {
-                        IsIntializingValues = false;
-                        IsUpdatingAttackValues = false;
-                        continue;
-                    }
-
-                    if (!await GetChampionBaseValuesAsync(RawChampionName))
-                    {
-                        IsIntializingValues = false;
-                        IsUpdatingAttackValues = false;
-                        continue;
+                        catch (Exception ex)
+                        {
+                            ChampionName = string.Empty;
+                            Console.WriteLine($"[Init] Retrying... {ex.Message}");
+                        }
                     }
 
-                    IsIntializingValues = false;
+                    // ALWAYS read attack speed — even if champion init failed
+                    double newAS = activePlayerToken["championStats"]?["attackSpeed"]?.Value<double>() ?? ClientAttackSpeed;
+                    if (newAS != ClientAttackSpeed)
+                    {
+                        ClientAttackSpeed = newAS;
+                        double secPerAtk = GetSecondsPerAttack();
+                        double windup = GetWindupDuration();
+                        double bufferedWindup = GetBufferedWindupDuration();
+                        double moveWindow = secPerAtk - bufferedWindup;
+                        Console.WriteLine($"[AS] {ClientAttackSpeed:F3} | Interval: {secPerAtk * 1000:F0}ms | Windup: {windup * 1000:F0}ms + {CurrentSettings.WindupBufferMs}ms = {bufferedWindup * 1000:F0}ms | Move Window: {moveWindow * 1000:F0}ms");
+                    }
+                    else if (!HasAttackSpeedData)
+                    {
+                        ClientAttackSpeed = newAS;
+                    }
+
+                    if (!HasAttackSpeedData)
+                    {
+                        HasAttackSpeedData = true;
+                        double secPerAtk = GetSecondsPerAttack();
+                        double windup = GetWindupDuration();
+                        double bufferedWindup = GetBufferedWindupDuration();
+                        double moveWindow = secPerAtk - bufferedWindup;
+                        Console.WriteLine($"[OK] Attack speed ready: {ClientAttackSpeed:F3} AS");
+                        Console.WriteLine($"  Interval:       {secPerAtk * 1000:F0}ms");
+                        Console.WriteLine($"  Windup:         {windup * 1000:F0}ms + {CurrentSettings.WindupBufferMs}ms buffer = {bufferedWindup * 1000:F0}ms");
+                        Console.WriteLine($"  Move Window:    {moveWindow * 1000:F0}ms");
+                    }
+                }
+                catch (HttpRequestException)
+                {
+                    // API not available yet (game loading) — silent retry
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[AttackSpeedPoll] Error: {ex.Message}");
                 }
 
-                ClientAttackSpeed = activePlayerToken["championStats"]["attackSpeed"].Value<double>();
-                IsUpdatingAttackValues = false;
+                await Task.Delay(CurrentSettings.AttackSpeedPollMs);
             }
         }
 
         private static async Task<bool> GetChampionBaseValuesAsync(string championName)
         {
-            string lowerChampionName = championName.ToLower();
-            JToken championBinToken = null;
             try
             {
+                string lowerChampionName = championName.ToLower();
                 string response = await Client.GetStringAsync($"{ChampionStatsEndpoint}{lowerChampionName}/{lowerChampionName}.bin.json");
-                championBinToken = JToken.Parse(response);
-            }
-            catch
-            {
-                return false;
-            }
-            JToken championRootStats = championBinToken[$"Characters/{championName}/CharacterRecords/Root"];
-            ChampionAttackSpeedRatio = championRootStats["attackSpeedRatio"].Value<double>(); ;
+                JToken championBinToken = JToken.Parse(response);
 
-            JToken championBasicAttackInfoToken = championRootStats["basicAttack"];
-            JToken championAttackDelayOffsetToken = championBasicAttackInfoToken["mAttackDelayCastOffsetPercent"];
-            JToken championAttackDelayOffsetSpeedRatioToken = championBasicAttackInfoToken["mAttackDelayCastOffsetPercentAttackSpeedRatio"];
-
-            if (championAttackDelayOffsetSpeedRatioToken?.Value<double?>() != null)
-            {
-                ChampionAttackDelayScaling = championAttackDelayOffsetSpeedRatioToken.Value<double>();
-            }
-
-            if (championAttackDelayOffsetToken?.Value<double?>() == null)
-            {
-                JToken attackTotalTimeToken = championBasicAttackInfoToken["mAttackTotalTime"];
-                JToken attackCastTimeToken = championBasicAttackInfoToken["mAttackCastTime"];
-
-                if (attackTotalTimeToken?.Value<double?>() == null && attackCastTimeToken?.Value<double?>() == null)
+                JToken championRootStats = championBinToken[$"Characters/{championName}/CharacterRecords/Root"];
+                if (championRootStats == null)
                 {
-                    string attackName = championBasicAttackInfoToken["mAttackName"].ToString();
-                    string attackSpell = $"Characters/{attackName.Split(new[] { "BasicAttack" }, StringSplitOptions.RemoveEmptyEntries)[0]}/Spells/{attackName}";
-                    ChampionAttackDelayPercent += championBinToken[attackSpell]["mSpell"]["delayCastOffsetPercent"].Value<double>();
+                    Console.WriteLine($"[Init] No root stats for '{championName}' in CommunityDragon");
+                    return false;
+                }
+
+                ChampionAttackSpeedRatio = championRootStats["attackSpeedRatio"]?.Value<double>() ?? 0.625;
+
+                JToken basicAttack = championRootStats["basicAttack"];
+                if (basicAttack == null)
+                {
+                    Console.WriteLine($"[Init] No basicAttack data for '{championName}'");
+                    return false;
+                }
+
+                JToken delayOffsetToken = basicAttack["mAttackDelayCastOffsetPercent"];
+                JToken delayScalingToken = basicAttack["mAttackDelayCastOffsetPercentAttackSpeedRatio"];
+
+                if (delayScalingToken?.Value<double?>() != null)
+                {
+                    ChampionAttackDelayScaling = delayScalingToken.Value<double>();
+                }
+
+                if (delayOffsetToken?.Value<double?>() == null)
+                {
+                    JToken attackTotalTimeToken = basicAttack["mAttackTotalTime"];
+                    JToken attackCastTimeToken = basicAttack["mAttackCastTime"];
+
+                    if (attackTotalTimeToken?.Value<double?>() == null && attackCastTimeToken?.Value<double?>() == null)
+                    {
+                        string attackName = basicAttack["mAttackName"]?.ToString() ?? string.Empty;
+                        if (!string.IsNullOrEmpty(attackName))
+                        {
+                            string attackSpell = $"Characters/{attackName.Split(new[] { "BasicAttack" }, StringSplitOptions.RemoveEmptyEntries)[0]}/Spells/{attackName}";
+                            double? offset = championBinToken[attackSpell]?["mSpell"]?["delayCastOffsetPercent"]?.Value<double?>();
+                            if (offset != null)
+                                ChampionAttackDelayPercent += offset.Value;
+                        }
+                    }
+                    else if (attackTotalTimeToken != null && attackCastTimeToken != null)
+                    {
+                        ChampionAttackTotalTime = attackTotalTimeToken.Value<double>();
+                        ChampionAttackCastTime = attackCastTimeToken.Value<double>();
+                        ChampionAttackDelayPercent = ChampionAttackCastTime / ChampionAttackTotalTime;
+                    }
                 }
                 else
                 {
-                    ChampionAttackTotalTime = attackTotalTimeToken.Value<double>();
-                    ChampionAttackCastTime = attackCastTimeToken.Value<double>(); ;
-
-                    ChampionAttackDelayPercent = ChampionAttackCastTime / ChampionAttackTotalTime;
+                    ChampionAttackDelayPercent += delayOffsetToken.Value<double>();
                 }
-            }
-            else
-            {
-                ChampionAttackDelayPercent += championAttackDelayOffsetToken.Value<double>(); ;
-            }
 
-            return true;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Init] Failed to load '{championName}': {ex.Message}");
+                return false;
+            }
         }
     }
 }

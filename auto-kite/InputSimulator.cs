@@ -120,14 +120,14 @@ namespace OddAutoWalker
         }
 
         /// <summary>
-        /// Sends attack-move-click as a single batched SendInput call:
-        /// KeyDown(scancode) → MouseDown(Left) → MouseUp(Left) → KeyUp(scancode)
-        /// 4 inputs in 1 syscall instead of 4 separate kernel transitions.
+        /// Sends attack command as a single key press (KeyDown → KeyUp).
+        /// The key should be bound to "Player Attack Move Click" in game settings.
+        /// 2 inputs in 1 syscall.
         /// </summary>
         public static void SendAttackClick(ushort attackScancode)
         {
             var extraInfo = GetMessageExtraInfo();
-            Input[] inputs = new Input[4]
+            Input[] inputs = new Input[2]
             {
                 new Input
                 {
@@ -139,32 +139,6 @@ namespace OddAutoWalker
                             wVk = 0,
                             wScan = attackScancode,
                             dwFlags = (uint)(KeyEventF.KeyDown | KeyEventF.Scancode),
-                            dwExtraInfo = extraInfo
-                        }
-                    }
-                },
-                new Input
-                {
-                    type = (int)InputType.Mouse,
-                    u = new InputUnion
-                    {
-                        mi = new MouseInput
-                        {
-                            mouseData = 0,
-                            dwFlags = (uint)MouseEventF.LeftDown,
-                            dwExtraInfo = extraInfo
-                        }
-                    }
-                },
-                new Input
-                {
-                    type = (int)InputType.Mouse,
-                    u = new InputUnion
-                    {
-                        mi = new MouseInput
-                        {
-                            mouseData = 0,
-                            dwFlags = (uint)MouseEventF.LeftUp,
                             dwExtraInfo = extraInfo
                         }
                     }
@@ -185,7 +159,7 @@ namespace OddAutoWalker
                 }
             };
 
-            SendInput(4, inputs, InputSize);
+            SendInput(2, inputs, InputSize);
         }
 
         /// <summary>

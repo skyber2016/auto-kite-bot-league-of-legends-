@@ -22,20 +22,20 @@ public class SettingsTests
         Assert.Equal((int)VirtualKeyCode.Space, settings.AutoKey);
         Assert.Equal(32, settings.AutoKey);
 
-        Assert.Equal(255, settings.TargetColorR);
-        Assert.Equal(0, settings.TargetColorG);
+        Assert.Equal(52, settings.TargetColorR);
+        Assert.Equal(3, settings.TargetColorG);
         Assert.Equal(0, settings.TargetColorB);
-        Assert.Equal(40, settings.ColorTolerance);
+        Assert.Equal(10, settings.ColorTolerance);
 
-        Assert.Equal(400, settings.CaptureSize);
+        Assert.Equal(1000, settings.CaptureSize);
         Assert.Equal(10, settings.MinClusterPixels);
         Assert.Equal(60, settings.DetectionFpsCap);
 
-        Assert.False(settings.EnableOverlay);
+        Assert.True(settings.EnableOverlay);
 
         Assert.Equal(66, settings.WindupBufferMs);
-        Assert.Equal(33, settings.MinInputDelayMs);
-        Assert.Equal(33, settings.OrbWalkTickRateMs);
+        Assert.Equal(150, settings.MinInputDelayMs);
+        Assert.Equal(1, settings.OrbWalkTickRateMs);
         Assert.Equal(500, settings.AttackSpeedPollMs);
     }
 
@@ -117,9 +117,9 @@ public class SettingsTests
 
             Assert.Equal((int)VirtualKeyCode.C, loaded.ManualKey);
             Assert.Equal(32, loaded.AutoKey);
-            Assert.Equal(400, loaded.CaptureSize);
+            Assert.Equal(1000, loaded.CaptureSize);
             Assert.Equal(60, loaded.DetectionFpsCap);
-            Assert.Equal(33, loaded.OrbWalkTickRateMs);
+            Assert.Equal(1, loaded.OrbWalkTickRateMs);
         }
         finally
         {
