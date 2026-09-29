@@ -15,18 +15,15 @@ public sealed class ManualOrbWalkStrategy : IOrbWalkStrategy
         // Save cursor position for restore
         var savedPos = MouseHelper.GetCursorPosition();
 
-        // Move cursor to target (smooth or instant)
-        if (settings.EnableSmoothCursor)
-            await InputSimulator.MoveCursorSmoothAsync(savedPos.X, savedPos.Y, targetX, targetY, settings.CursorSteps, settings.CursorMoveMs);
-        else
-            InputSimulator.SetCursorPosition(targetX, targetY);
+        // Atomic: move cursor to target AND send KeyDown in a single SendInput syscall.
+        // This eliminates the race where the game reads cursor before it reaches the target.
+        InputSimulator.SendMoveAndKeyDown(targetX, targetY, attackScancode);
 
-        // Key press with humanized hold duration
-        InputSimulator.Keyboard.KeyDown(attackScancode);
+        // Humanized key hold duration
         await Task.Delay(TimingJitter.Apply(settings.KeyHoldBaseMs, settings.KeyHoldJitterMs));
         InputSimulator.Keyboard.KeyUp(attackScancode);
 
-        // Restore cursor
+        // Restore cursor to original position
         if (settings.EnableCursorRestore)
             InputSimulator.SetCursorPosition(savedPos.X, savedPos.Y);
 

@@ -16,14 +16,16 @@ public sealed class AutoOrbWalkStrategy : IOrbWalkStrategy
         {
             savedPos = MouseHelper.GetCursorPosition();
 
-            if (settings.EnableSmoothCursor)
-                await InputSimulator.MoveCursorSmoothAsync(savedPos.Value.X, savedPos.Value.Y, targetX, targetY, settings.CursorSteps, settings.CursorMoveMs);
-            else
-                InputSimulator.SetCursorPosition(targetX, targetY);
+            // Atomic: move cursor to target AND send KeyDown in a single SendInput syscall.
+            InputSimulator.SendMoveAndKeyDown(targetX, targetY, attackScancode);
+        }
+        else
+        {
+            // No target — attack-move at current cursor position
+            InputSimulator.Keyboard.KeyDown(attackScancode);
         }
 
-        // Key press with humanized hold duration
-        InputSimulator.Keyboard.KeyDown(attackScancode);
+        // Humanized key hold duration
         await Task.Delay(TimingJitter.Apply(settings.KeyHoldBaseMs, settings.KeyHoldJitterMs));
         InputSimulator.Keyboard.KeyUp(attackScancode);
 

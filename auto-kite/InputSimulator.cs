@@ -237,6 +237,56 @@ namespace OddAutoWalker
         }
 
         /// <summary>
+        /// Atomically moves cursor to (x, y) AND sends KeyDown in a single SendInput call.
+        /// This guarantees the cursor is at the target position when the key press is processed,
+        /// eliminating the race condition between separate SetCursorPosition + KeyDown calls.
+        /// </summary>
+        public static void SendMoveAndKeyDown(int x, int y, ushort scancode)
+        {
+            int screenWidth = Win32.GetSystemMetrics(0);
+            int screenHeight = Win32.GetSystemMetrics(1);
+            int normX = (int)Math.Round(x * 65535.0 / (screenWidth - 1));
+            int normY = (int)Math.Round(y * 65535.0 / (screenHeight - 1));
+
+            var extraInfo = GetMessageExtraInfo();
+            Input[] inputs = new Input[2]
+            {
+                new Input
+                {
+                    type = INPUT_MOUSE,
+                    u = new InputUnion
+                    {
+                        mi = new MouseInput
+                        {
+                            dx = normX,
+                            dy = normY,
+                            dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+                            mouseData = 0,
+                            dwExtraInfo = extraInfo,
+                            time = 0
+                        }
+                    }
+                },
+                new Input
+                {
+                    type = (int)InputType.Keyboard,
+                    u = new InputUnion
+                    {
+                        ki = new KeyboardInput
+                        {
+                            wVk = 0,
+                            wScan = scancode,
+                            dwFlags = (uint)(KeyEventF.KeyDown | KeyEventF.Scancode),
+                            dwExtraInfo = extraInfo
+                        }
+                    }
+                }
+            };
+
+            SendInput(2, inputs, InputSize);
+        }
+
+        /// <summary>
         /// Moves cursor from (fromX,fromY) to (toX,toY) in multiple steps with slight noise.
         /// </summary>
         public static async Task MoveCursorSmoothAsync(int fromX, int fromY, int toX, int toY, int steps, int totalMs)
