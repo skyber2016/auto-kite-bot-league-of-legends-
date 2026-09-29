@@ -1,3 +1,6 @@
+using System.Threading.Tasks;
+using DetectColor.Input;
+
 namespace OddAutoWalker.Strategies;
 
 /// <summary>
@@ -5,14 +8,29 @@ namespace OddAutoWalker.Strategies;
 /// </summary>
 public sealed class AutoOrbWalkStrategy : IOrbWalkStrategy
 {
-    public bool TryAttack(bool hasTarget, int targetX, int targetY, ushort attackScancode)
+    public async Task<bool> TryAttackAsync(bool hasTarget, int targetX, int targetY, ushort attackScancode, Settings settings)
     {
+        System.Drawing.Point? savedPos = null;
+
         if (hasTarget)
         {
-            InputSimulator.SetCursorPosition(targetX, targetY);
+            savedPos = MouseHelper.GetCursorPosition();
+
+            if (settings.EnableSmoothCursor)
+                await InputSimulator.MoveCursorSmoothAsync(savedPos.Value.X, savedPos.Value.Y, targetX, targetY, settings.CursorSteps, settings.CursorMoveMs);
+            else
+                InputSimulator.SetCursorPosition(targetX, targetY);
         }
 
-        InputSimulator.SendAttackClick(attackScancode);
+        // Key press with humanized hold duration
+        InputSimulator.Keyboard.KeyDown(attackScancode);
+        await Task.Delay(TimingJitter.Apply(settings.KeyHoldBaseMs, settings.KeyHoldJitterMs));
+        InputSimulator.Keyboard.KeyUp(attackScancode);
+
+        // Restore cursor if we moved it
+        if (settings.EnableCursorRestore && savedPos.HasValue)
+            InputSimulator.SetCursorPosition(savedPos.Value.X, savedPos.Value.Y);
+
         return true;
     }
 }

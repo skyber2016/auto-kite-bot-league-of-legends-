@@ -1,5 +1,7 @@
 namespace OddAutoWalker.Tests;
 
+using System;
+using System.Threading.Tasks;
 using OddAutoWalker.Strategies;
 using Xunit;
 
@@ -29,10 +31,27 @@ public class OrbWalkStrategyTests
     }
 
     [Fact]
-    public void ManualStrategy_WithoutTarget_ReturnsFalse()
+    public async Task ManualStrategy_WithoutTarget_ReturnsFalse()
     {
         var strategy = new ManualOrbWalkStrategy();
-        bool result = strategy.TryAttack(hasTarget: false, targetX: 0, targetY: 0, attackScancode: 0x1E);
+        var settings = new Settings();
+        bool result = await strategy.TryAttackAsync(hasTarget: false, targetX: 0, targetY: 0, attackScancode: 0x1E, settings: settings);
         Assert.False(result);
+    }
+
+    [Fact]
+    public void GetExtraInfo_ZeroMode_ReturnsZero()
+    {
+        var settings = new Settings { ExtraInfoMode = "zero" };
+        var extraInfo = InputSimulator.GetExtraInfo(settings);
+        Assert.Equal(UIntPtr.Zero, extraInfo);
+    }
+
+    [Fact]
+    public void GetExtraInfo_NativeMode_DoesNotThrow()
+    {
+        var settings = new Settings { ExtraInfoMode = "native" };
+        var extraInfo = InputSimulator.GetExtraInfo(settings);
+        // Native mode calls Win32 GetMessageExtraInfo() without throwing
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using INPUT = OddAutoWalker.InputSimulator.Input;
 using MOUSEINPUT = OddAutoWalker.InputSimulator.MouseInput;
 
@@ -233,6 +234,37 @@ namespace OddAutoWalker
             };
 
             SendInput(1, new[] { input }, InputSize);
+        }
+
+        /// <summary>
+        /// Moves cursor from (fromX,fromY) to (toX,toY) in multiple steps with slight noise.
+        /// </summary>
+        public static async Task MoveCursorSmoothAsync(int fromX, int fromY, int toX, int toY, int steps, int totalMs)
+        {
+            if (steps <= 1)
+            {
+                SetCursorPosition(toX, toY);
+                return;
+            }
+
+            int delayPerStep = Math.Max(1, totalMs / steps);
+            for (int i = 1; i <= steps; i++)
+            {
+                double t = (double)i / steps;
+                int x = (int)(fromX + (toX - fromX) * t + TimingJitter.Apply(0, 2));
+                int y = (int)(fromY + (toY - fromY) * t + TimingJitter.Apply(0, 2));
+                SetCursorPosition(x, y);
+                if (i < steps)
+                    await Task.Delay(delayPerStep);
+            }
+        }
+
+        /// <summary>
+        /// Returns the appropriate dwExtraInfo value based on settings.
+        /// </summary>
+        public static UIntPtr GetExtraInfo(Settings settings)
+        {
+            return settings.ExtraInfoMode == "zero" ? UIntPtr.Zero : GetMessageExtraInfo();
         }
 
         public static class Keyboard
