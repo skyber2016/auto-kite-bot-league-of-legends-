@@ -22,7 +22,7 @@ namespace OddAutoWalker
         public int TargetColorR { get; set; } = 52;
         public int TargetColorG { get; set; } = 3;
         public int TargetColorB { get; set; } = 0;
-        public int ColorTolerance { get; set; } = 10;
+        public int ColorTolerance { get; set; } = 5;
 
         // Detection Area & Filtering
         public int CaptureSize { get; set; } = 1000;
@@ -34,7 +34,7 @@ namespace OddAutoWalker
         public int TargetOffsetY { get; set; } = 120;
 
         // Visual Overlay Debug
-        public bool EnableOverlay { get; set; } = false;
+        public bool EnableOverlay { get; set; } = true;
 
         // Orb-Walk Timing parameters (ms)
         public int WindupBufferMs { get; set; } = 66;

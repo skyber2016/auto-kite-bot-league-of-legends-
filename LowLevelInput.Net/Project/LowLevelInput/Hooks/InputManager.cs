@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -216,6 +216,8 @@ namespace LowLevelInput.Hooks
         private void _keyboardHook_OnKeyboardEvent(VirtualKeyCode key, KeyState state)
         {
             if (key == VirtualKeyCode.Invalid) return;
+
+            if (!_keyStates.ContainsKey(key)) return;
 
             state = state == KeyState.Down && _keyStates[key] == KeyState.Down
                 ? KeyState.Pressed

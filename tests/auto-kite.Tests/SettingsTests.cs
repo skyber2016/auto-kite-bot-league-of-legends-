@@ -25,13 +25,13 @@ public class SettingsTests
         Assert.Equal(52, settings.TargetColorR);
         Assert.Equal(3, settings.TargetColorG);
         Assert.Equal(0, settings.TargetColorB);
-        Assert.Equal(10, settings.ColorTolerance);
+        Assert.Equal(5, settings.ColorTolerance);
 
         Assert.Equal(1000, settings.CaptureSize);
         Assert.Equal(10, settings.MinClusterPixels);
         Assert.Equal(60, settings.DetectionFpsCap);
 
-        Assert.False(settings.EnableOverlay);
+        Assert.True(settings.EnableOverlay);
 
         Assert.Equal(66, settings.WindupBufferMs);
         Assert.Equal(75, settings.MinInputDelayMs);

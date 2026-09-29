@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using DetectColor.Input;
 
@@ -15,11 +16,14 @@ public sealed class ManualOrbWalkStrategy : IOrbWalkStrategy
         // Save cursor position for restore
         var savedPos = MouseHelper.GetCursorPosition();
 
-        // Atomic: move cursor to target AND send KeyDown in a single SendInput syscall.
-        // This eliminates the race where the game reads cursor before it reaches the target.
-        InputSimulator.SendMoveAndKeyDown(targetX, targetY, attackScancode);
+        // Move cursor to target
+        InputSimulator.SetCursorPosition(targetX, targetY);
 
-        // Humanized key hold duration
+        // Small delay to ensure game sees the new cursor position
+        await Task.Delay(5);
+
+        // Key press with humanized hold duration
+        InputSimulator.Keyboard.KeyDown(attackScancode);
         await Task.Delay(TimingJitter.Apply(settings.KeyHoldBaseMs, settings.KeyHoldJitterMs));
         InputSimulator.Keyboard.KeyUp(attackScancode);
 

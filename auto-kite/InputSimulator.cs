@@ -22,6 +22,10 @@ namespace OddAutoWalker
         {
             [DllImport("user32.dll")]
             public static extern int GetSystemMetrics(int nIndex);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool SetCursorPos(int X, int Y);
         }
 
         private const int INPUT_MOUSE = 0;
@@ -205,35 +209,11 @@ namespace OddAutoWalker
         }
 
         /// <summary>
-        /// Moves the cursor to absolute screen coordinates using SendInput.
-        /// Normalized to 0..65535 as expected by MOUSEEVENTF_ABSOLUTE.
+        /// Moves the cursor to absolute screen coordinates using Win32 SetCursorPos.
         /// </summary>
         public static void SetCursorPosition(int x, int y)
         {
-            int screenWidth = Win32.GetSystemMetrics(0);  // SM_CXSCREEN
-            int screenHeight = Win32.GetSystemMetrics(1); // SM_CYSCREEN
-
-            int normX = (int)Math.Round(x * 65535.0 / (screenWidth - 1));
-            int normY = (int)Math.Round(y * 65535.0 / (screenHeight - 1));
-
-            INPUT input = new INPUT
-            {
-                type = INPUT_MOUSE,
-                u = new InputUnion
-                {
-                    mi = new MOUSEINPUT
-                    {
-                        dx = normX,
-                        dy = normY,
-                        dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
-                        mouseData = 0,
-                        dwExtraInfo = UIntPtr.Zero,
-                        time = 0
-                    }
-                }
-            };
-
-            SendInput(1, new[] { input }, InputSize);
+            Win32.SetCursorPos(x, y);
         }
 
         /// <summary>
