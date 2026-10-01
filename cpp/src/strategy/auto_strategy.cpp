@@ -4,10 +4,13 @@
 #include <thread>
 #include <chrono>
 
-bool AutoOrbWalkStrategy::try_attack(bool /*has_target*/, int /*target_x*/,
-                                     int /*target_y*/,
+bool AutoOrbWalkStrategy::try_attack(bool has_target, int target_x,
+                                     int target_y,
                                      uint16_t attack_scancode,
                                      const Settings& settings) {
+    if (has_target) {
+        InputSimulator::set_cursor_position(target_x, target_y);
+    }
     InputSimulator::send_attack_click(attack_scancode);
     int hold_ms = TimingJitter::apply(settings.key_hold_base_ms,
                                        settings.key_hold_jitter_ms);
