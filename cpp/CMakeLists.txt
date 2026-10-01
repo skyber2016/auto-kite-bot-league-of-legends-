@@ -5,7 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Executable
-add_executable(auto_kite src/main.cpp)
+add_executable(auto_kite
+    src/main.cpp
+    src/core/timing_jitter.cpp
+)
 target_include_directories(auto_kite PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(auto_kite PRIVATE /W4 /EHsc)
 target_link_libraries(auto_kite PRIVATE
