@@ -276,9 +276,90 @@ static void api_polling_loop(std::stop_token stop) {
                             std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
                             auto champ = g_api_client.get_champion_data(name);
                             if (champ) {
-                                // Parse base attack values from CommunityDragon
-                                // (simplified — actual parsing depends on JSON structure)
-                                // TODO: Parse attackSpeedRatio, attackDelayOffsetPercent, etc. from CommunityDragon JSON
+                                // Parse champion base attack values from CommunityDragon
+                                try {
+                                    const auto& champ_json = *champ;
+
+                                    // Find the CharacterRecords/Root key (case-insensitive search)
+                                    nlohmann::json root_stats;
+                                    bool found_root = false;
+                                    for (auto& [key, val] : champ_json.items()) {
+                                        std::string lower_key = key;
+                                        std::transform(lower_key.begin(), lower_key.end(), lower_key.begin(),
+                                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                                        if (lower_key.find("characterrecords/root") != std::string::npos) {
+                                            root_stats = val;
+                                            found_root = true;
+                                            break;
+                                        }
+                                    }
+
+                                    if (found_root) {
+                                        // attackSpeedRatio
+                                        if (root_stats.contains("attackSpeedRatio") && !root_stats["attackSpeedRatio"].is_null()) {
+                                            g_attack_speed_ratio.store(root_stats["attackSpeedRatio"].get<double>());
+                                        }
+
+                                        // basicAttack
+                                        if (root_stats.contains("basicAttack") && root_stats["basicAttack"].is_object()) {
+                                            const auto& ba = root_stats["basicAttack"];
+
+                                            // Delay scaling
+                                            if (ba.contains("mAttackDelayCastOffsetPercentAttackSpeedRatio") &&
+                                                !ba["mAttackDelayCastOffsetPercentAttackSpeedRatio"].is_null()) {
+                                                g_attack_delay_scaling.store(
+                                                    ba["mAttackDelayCastOffsetPercentAttackSpeedRatio"].get<double>());
+                                            }
+
+                                            // Delay offset
+                                            if (ba.contains("mAttackDelayCastOffsetPercent") &&
+                                                !ba["mAttackDelayCastOffsetPercent"].is_null()) {
+                                                double current = g_attack_delay_offset.load();
+                                                g_attack_delay_offset.store(
+                                                    current + ba["mAttackDelayCastOffsetPercent"].get<double>());
+                                            } else if (ba.contains("mAttackTotalTime") && !ba["mAttackTotalTime"].is_null() &&
+                                                       ba.contains("mAttackCastTime") && !ba["mAttackCastTime"].is_null()) {
+                                                double total = ba["mAttackTotalTime"].get<double>();
+                                                double cast = ba["mAttackCastTime"].get<double>();
+                                                g_attack_cast_time.store(cast);
+                                                if (total > 0.0) {
+                                                    g_attack_delay_offset.store(cast / total);
+                                                }
+                                            } else if (ba.contains("mAttackName") && !ba["mAttackName"].is_null()) {
+                                                std::string attack_name = ba["mAttackName"].get<std::string>();
+                                                if (!attack_name.empty()) {
+                                                    std::string lower_attack = attack_name;
+                                                    std::transform(lower_attack.begin(), lower_attack.end(), lower_attack.begin(),
+                                                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                                                    for (auto& [key, val] : champ_json.items()) {
+                                                        std::string lower_key = key;
+                                                        std::transform(lower_key.begin(), lower_key.end(), lower_key.begin(),
+                                                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                                                        if (lower_key.find("spells/" + lower_attack) != std::string::npos) {
+                                                            if (val.contains("mSpell") && val["mSpell"].is_object() &&
+                                                                val["mSpell"].contains("delayCastOffsetPercent") &&
+                                                                !val["mSpell"]["delayCastOffsetPercent"].is_null()) {
+                                                                double offset = val["mSpell"]["delayCastOffsetPercent"].get<double>();
+                                                                g_attack_delay_offset.store(g_attack_delay_offset.load() + offset);
+                                                            }
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        std::cout << "[Init] Champion stats loaded from CommunityDragon" << std::endl;
+                                        std::cout << "  AS Ratio:      " << g_attack_speed_ratio.load() << std::endl;
+                                        std::cout << "  Delay%:        " << g_attack_delay_offset.load() << std::endl;
+                                        std::cout << "  Delay Scaling: " << g_attack_delay_scaling.load() << std::endl;
+                                        std::cout << "  Cast Time:     " << g_attack_cast_time.load() << "s" << std::endl;
+                                    } else {
+                                        std::cerr << "[Init] No root stats found in CommunityDragon data" << std::endl;
+                                    }
+                                } catch (const std::exception& e) {
+                                    std::cerr << "[Init] Failed to parse CommunityDragon data: " << e.what() << std::endl;
+                                }
                                 loaded_champ = true;
                             }
                         }

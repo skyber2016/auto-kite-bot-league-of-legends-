@@ -28,6 +28,10 @@ void Settings::save(const std::filesystem::path& path) const {
     if (path.has_parent_path())
         fs::create_directories(path.parent_path());
     std::ofstream file(path);
+    if (!file.is_open()) {
+        std::cerr << "[Settings] Failed to open file for writing: " << path << std::endl;
+        return;
+    }
     nlohmann::json j = *this;
     file << j.dump(4);
 }

@@ -6,15 +6,15 @@ add_executable(auto_kite_tests
     test_color_matcher.cpp
     test_cluster_finder.cpp
     test_strategy.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/timing_jitter.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/settings.cpp
-    ${CMAKE_SOURCE_DIR}/src/detection/color_matcher.cpp
-    ${CMAKE_SOURCE_DIR}/src/detection/cluster_finder.cpp
-    ${CMAKE_SOURCE_DIR}/src/input/mouse_helper.cpp
-    ${CMAKE_SOURCE_DIR}/src/input/input_simulator.cpp
-    ${CMAKE_SOURCE_DIR}/src/strategy/auto_strategy.cpp
-    ${CMAKE_SOURCE_DIR}/src/strategy/manual_strategy.cpp
-    ${CMAKE_SOURCE_DIR}/src/strategy/strategy_factory.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/timing_jitter.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/settings.cpp
+    ${PROJECT_SOURCE_DIR}/src/detection/color_matcher.cpp
+    ${PROJECT_SOURCE_DIR}/src/detection/cluster_finder.cpp
+    ${PROJECT_SOURCE_DIR}/src/input/mouse_helper.cpp
+    ${PROJECT_SOURCE_DIR}/src/input/input_simulator.cpp
+    ${PROJECT_SOURCE_DIR}/src/strategy/auto_strategy.cpp
+    ${PROJECT_SOURCE_DIR}/src/strategy/manual_strategy.cpp
+    ${PROJECT_SOURCE_DIR}/src/strategy/strategy_factory.cpp
 )
 target_link_libraries(auto_kite_tests PRIVATE
     GTest::gtest
@@ -23,7 +23,7 @@ target_link_libraries(auto_kite_tests PRIVATE
     user32
     winmm
 )
-target_include_directories(auto_kite_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(auto_kite_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_compile_options(auto_kite_tests PRIVATE /W4 /EHsc)
 
 include(GoogleTest)
