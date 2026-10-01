@@ -34,14 +34,12 @@ static std::atomic<bool> g_has_target{false};
 static std::atomic<int> g_target_x{0};
 static std::atomic<int> g_target_y{0};
 static std::atomic<double> g_attack_speed{0.0};
-static std::atomic<double> g_seconds_per_attack{0.0};
-static std::atomic<double> g_windup_duration{0.0};
 
 // Champion base values from CommunityDragon
-static double g_attack_speed_ratio = 0.625;
-static double g_attack_delay_offset = 0.0;
-static double g_attack_delay_scaling = 1.0;
-static double g_attack_cast_time = 0.0;
+static std::atomic<double> g_attack_speed_ratio{0.625};
+static std::atomic<double> g_attack_delay_offset{0.3};
+static std::atomic<double> g_attack_delay_scaling{1.0};
+static std::atomic<double> g_attack_cast_time{0.0};
 
 static std::atomic<OrbWalkMode> g_active_mode{OrbWalkMode::None};
 static std::jthread g_detection_thread;
@@ -62,15 +60,15 @@ static double get_seconds_per_attack() {
 
 static double get_windup_duration() {
     double spa = get_seconds_per_attack();
-    double base = (spa * g_attack_delay_offset - g_attack_cast_time)
-                  * g_attack_delay_scaling + g_attack_cast_time;
+    double base = (spa * g_attack_delay_offset.load() - g_attack_cast_time.load())
+                  * g_attack_delay_scaling.load() + g_attack_cast_time.load();
     return std::max(0.0, base);
 }
 
 static double get_buffered_windup() {
     double windup = get_windup_duration();
     double as = g_attack_speed.load();
-    double scale = g_attack_speed_ratio / std::max(0.3, as);
+    double scale = g_attack_speed_ratio.load() / std::max(0.3, as);
     int adaptive_ms = std::max(g_settings.min_windup_buffer_ms,
         static_cast<int>(g_settings.windup_buffer_ms * scale));
     int buffered_ms = TimingJitter::apply_positive(adaptive_ms,
@@ -187,6 +185,12 @@ static void orbwalk_loop(std::stop_token stop) {
 
     while (!stop.stop_requested()) {
         auto start = std::chrono::steady_clock::now();
+
+        if (!is_league_foreground()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
         auto mode = g_active_mode.load();
 
         if (mode == OrbWalkMode::None || !g_has_attack_speed.load()) {
@@ -266,14 +270,16 @@ static void api_polling_loop(std::stop_token stop) {
                     // Load champion data once
                     static bool loaded_champ = false;
                     if (!loaded_champ) {
-                        std::string name = j["championName"].get<std::string>();
-                        // Lowercase using std::transform
-                        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
-                        auto champ = g_api_client.get_champion_data(name);
-                        if (champ) {
-                            // Parse base attack values from CommunityDragon
-                            // (simplified — actual parsing depends on JSON structure)
-                            loaded_champ = true;
+                        std::string name = j.value("championName", std::string(""));
+                        if (!name.empty()) {
+                            // Lowercase using std::transform
+                            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+                            auto champ = g_api_client.get_champion_data(name);
+                            if (champ) {
+                                // Parse base attack values from CommunityDragon
+                                // (simplified — actual parsing depends on JSON structure)
+                                loaded_champ = true;
+                            }
                         }
                     }
                 } catch (...) {}
@@ -289,7 +295,7 @@ static void api_polling_loop(std::stop_token stop) {
 
 // ── Keyboard Handler ──
 static void on_keyboard(int vk, bool down) {
-    if (!is_league_foreground()) return;
+    if (down && !is_league_foreground()) return;
 
     if (vk == g_settings.manual_key) {
         if (down) {
