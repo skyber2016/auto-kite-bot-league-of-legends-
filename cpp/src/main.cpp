@@ -43,7 +43,7 @@ static std::atomic<double> g_attack_delay_scaling{1.0};
 static std::atomic<double> g_attack_cast_time{0.0};
 
 static std::atomic<OrbWalkMode> g_active_mode{OrbWalkMode::None};
-static std::atomic<bool> g_detection_enabled{true};
+static std::atomic<bool> g_detection_enabled{false};
 static std::jthread g_detection_thread;
 static std::jthread g_orbwalk_thread;
 static std::jthread g_api_thread;
