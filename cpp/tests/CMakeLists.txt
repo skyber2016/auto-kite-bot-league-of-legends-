@@ -4,8 +4,12 @@ add_executable(auto_kite_tests
     test_placeholder.cpp
     test_timing_jitter.cpp
     test_settings.cpp
+    test_color_matcher.cpp
+    test_cluster_finder.cpp
     ${CMAKE_SOURCE_DIR}/src/core/timing_jitter.cpp
     ${CMAKE_SOURCE_DIR}/src/core/settings.cpp
+    ${CMAKE_SOURCE_DIR}/src/detection/color_matcher.cpp
+    ${CMAKE_SOURCE_DIR}/src/detection/cluster_finder.cpp
 )
 target_link_libraries(auto_kite_tests PRIVATE
     GTest::gtest
