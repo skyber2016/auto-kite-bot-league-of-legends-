@@ -34,6 +34,9 @@ target_link_libraries(auto_kite PRIVATE
     CURL::libcurl
 )
 
+# Install
+install(TARGETS auto_kite RUNTIME DESTINATION bin)
+
 # Tests
 enable_testing()
 add_subdirectory(tests)

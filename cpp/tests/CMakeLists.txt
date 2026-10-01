@@ -1,7 +1,6 @@
 find_package(GTest CONFIG REQUIRED)
 
 add_executable(auto_kite_tests
-    test_placeholder.cpp
     test_timing_jitter.cpp
     test_settings.cpp
     test_color_matcher.cpp
