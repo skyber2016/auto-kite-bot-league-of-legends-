@@ -24,6 +24,7 @@ add_executable(auto_kite
     src/strategy/strategy_factory.cpp
     src/overlay/overlay_window.cpp
     src/overlay/overlay_renderer.cpp
+    app.rc
 )
 target_include_directories(auto_kite PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(auto_kite PRIVATE /W4 /EHsc)
