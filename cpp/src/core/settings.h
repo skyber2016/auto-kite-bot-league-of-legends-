@@ -24,7 +24,7 @@ struct Settings {
     bool enable_overlay = false;
 
     // Orb-walk timings
-    int windup_buffer_ms = 66;
+    int windup_buffer_ms = 15;
     int min_input_delay_ms = 75;
     int orbwalk_tick_rate_ms = 1;
     int attack_speed_poll_ms = 500;
@@ -32,13 +32,13 @@ struct Settings {
     // Anti-detection
     bool enable_cursor_restore = true;
     int input_jitter_ms = 15;
-    int windup_jitter_ms = 10;
+    int windup_jitter_ms = 5;
     uint16_t attack_move_scancode = 0x23;
     int key_hold_base_ms = 40;
     int key_hold_jitter_ms = 30;
     int click_hold_base_ms = 30;
     int click_hold_jitter_ms = 20;
-    int min_windup_buffer_ms = 15;
+    int min_windup_buffer_ms = 5;
     bool enable_smooth_cursor = true;
     int cursor_steps = 3;
     int cursor_move_ms = 8;
