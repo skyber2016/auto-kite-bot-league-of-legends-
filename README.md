@@ -1,283 +1,277 @@
-# Auto-Kite Bot for League of Legends
+# Auto Kite Bot — League of Legends
 
-A high-performance, anti-detect orb-walking and auto-kiting bot for League of Legends built in C# (.NET 10). It features GPU-accelerated DXGI screen capture, color-based target detection with BFS clustering, dynamic attack speed polling via the official Live Client Data API and CommunityDragon, and extensive input humanization to evade detection heuristics.
+Native C++20 orbwalk bot for League of Legends. Uses DXGI screen capture for target detection and Win32 SendInput for humanized input simulation.
 
----
+## Features
 
-## Table of Contents
+- **Color-based target detection** — DXGI Desktop Duplication screen capture + pixel color matching
+- **Orbwalk engine** — timestamp-based attack/move cycle matching game mechanics
+- **Auto & Manual mode** — hold key to activate, release to stop
+- **Detection toggle (M key)** — ON: detect + attack target, OFF: attack at cursor
+- **Humanized input** — jittered delays, click hold duration, pattern scrambling
+- **Kite direction** — auto mode moves cursor away from target
+- **Champion data** — fetches attack speed from Riot Client API, windup from CommunityDragon
+- **Overlay** — optional Direct2D overlay showing detection boxes
+- **Audio feedback** — beep sounds on toggle
 
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Architecture](#architecture)
-- [Settings Reference](#settings-reference)
-- [Prerequisites & In-Game Configuration](#prerequisites--in-game-configuration)
-- [Getting Started](#getting-started)
-- [Building & Publishing](#building--publishing)
-- [Anti-Detection & Humanization Details](#anti-detection--humanization-details)
-- [Troubleshooting](#troubleshooting)
-- [Disclaimer](#disclaimer)
+## Build
 
----
+### Requirements
 
-## Overview
+- **Visual Studio 2022+** with C++ Desktop workload
+- **vcpkg** (package manager)
+- **Windows SDK** (for `rc.exe`)
 
-Auto-Kite Bot delivers frame-perfect kiting and orb-walking (attack-moving while maintaining maximum movement efficiency) without injecting code or reading protected game memory. Target acquisition is performed via low-latency screen capture and color clustering, while champion attack speed and windup timings are fetched dynamically from the local Riot Live Client Data API and CommunityDragon database.
+### Steps
 
-### Core Highlights
+```powershell
+# 1. Clone & enter
+cd cpp
 
-- **Dual-Mode Operation:** Choose between focused target kiting (Manual Mode) or continuous autonomous kiting (Auto Mode).
-- **GPU-Accelerated Vision:** DXGI Desktop Duplication captures the center gameplay area with sub-millisecond overhead.
-- **Microsecond Precision:** High-resolution timers (`Stopwatch` + Windows 1ms timer period) eliminate timing drift.
-- **Deep Humanization:** Multi-layered anti-detection includes cursor smoothing, timing jitter, key hold variation, input scrambling, and cursor restore.
-- **Standalone Portable Executable:** Compiles to a self-contained, single-file binary with no runtime dependencies.
+# 2. Configure (vcpkg auto-installs dependencies)
+cmake --preset default
 
----
+# 3. Build
+cmake --build build --config Release
 
-## Key Features
+# 4. Run tests
+cd build && ctest --build-config Release --output-on-failure
+```
 
-1. **Dual-Mode Orb-Walking**
-   - **Manual Mode (Default: Hold `C`):** Attacks only when an enemy target is detected within the capture area; otherwise moves towards your cursor. Ideal for precise teamfight focus.
-   - **Auto Mode (Default: Hold `Space`):** Continuously kites and attacks. Prioritizes detected targets, but will issue attack-moves toward the cursor or kite away automatically if no target is locked.
+Output: `cpp/build/Release/auto_kite.exe` (~330 KB)
 
-2. **DXGI GPU-Accelerated Screen Capture**
-   - Direct3D 11 / DXGI Desktop Duplication API captures screen buffers directly from VRAM, bypassing slow GDI/BitBlt screen scraping and avoiding frame drops.
+### Dependencies (auto-installed via vcpkg)
 
-3. **Color Detection with BFS Clustering**
-   - Scans the capture window for pixels matching the enemy health bar / champion outline color within a configurable RGB tolerance.
-   - Applies Breadth-First Search (BFS) connected-component analysis to group matching pixels into clusters, filtering out single-pixel noise and false positives.
+| Package | Usage |
+|---------|-------|
+| nlohmann-json | Settings JSON serialization |
+| libcurl | Riot Client API + CommunityDragon HTTP |
+| directxtk | DirectX helpers |
+| gtest | Unit tests |
 
-4. **Dynamic Attack Speed & Windup Calculation**
-   - Automatically polls the official local Riot Live Client Data API (`https://127.0.0.1:2999/liveclientdata/activeplayer`) for real-time attack speed.
-   - Queries character metadata from CommunityDragon to accurately obtain base attack delay, cast time, and attack speed scaling ratios for exact windup math.
+## Usage
 
-5. **Cursor Restore (Snap-Back)**
-   - Instantly or smoothly snaps the cursor back to your original aiming position after executing an attack-move click, ensuring seamless mouse tracking.
+```powershell
+cd cpp/build/Release
+./auto_kite.exe
+```
 
-6. **Humanized Smooth Cursor Movement**
-   - Moves the cursor in configurable intermediate interpolated steps over a randomized transit time instead of instant coordinate teleportation, mimicking natural human mouse kinematics.
+### Keybinds
 
-7. **Randomized Input Timing Jitter**
-   - Applies symmetric random jitter to move command delays and positive jitter to windup buffers, defeating static interval pattern detectors.
+| Key | Action |
+|-----|--------|
+| **Space** (VK 32) | Hold = Auto mode (detect + orbwalk) |
+| **C** (VK 67) | Hold = Manual mode (attack target at cursor) |
+| **M** | Toggle detection ON/OFF (beep feedback) |
+| **Ctrl+C** | Exit |
 
-8. **Variable Key Hold Duration**
-   - Implements realistic human-like key and button press/release timing with configurable base hold durations and random jitter for both keyboard keys and mouse clicks.
+### Modes
 
-9. **Input Pattern Scrambling**
-   - Periodically introduces micro-irregularities such as skipping a move tick or injecting an extra micro-adjustment move click at configurable probabilities.
+| Mode | Detection ON (M) | Detection OFF (M) |
+|------|-------------------|---------------------|
+| **Auto** (Space) | Detect target → move cursor → attack | Attack at current cursor |
+| **Manual** (C) | Save cursor → move to target → attack → restore cursor | Same |
 
-10. **Adaptive Windup Buffer**
-    - Dynamically scales the windup safety margin inversely with attack speed. At high attack speeds (e.g., Jinx, Kog'Maw, Lethal Tempo), the buffer narrows toward a configurable minimum floor to maximize DPS without canceling basic attacks.
+## Settings (`settings.json`)
 
-11. **Auto Kite Direction**
-    - When enabled in Auto Mode, calculates an evasion vector away from the detected enemy and automatically issues move commands at a specified safety distance instead of moving toward the mouse cursor.
+Auto-created on first run. Edit and restart to apply.
 
-12. **Sticky Target Lock (Hysteresis)**
-    - Prevents cursor jitter and target flipping when multiple enemies are clustered close together by retaining focus on the previously targeted enemy within a hysteresis radius.
+### Keybinds
 
-13. **Configurable Attack Key Scancode**
-    - Sends low-level DirectInput hardware scancodes (e.g., `0x23` for DIK_H, `0x1E` for DIK_A) for direct compatibility with League of Legends' input pipeline.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `manual_key` | `67` (C) | Virtual key code for manual mode |
+| `auto_key` | `32` (Space) | Virtual key code for auto mode |
+| `attack_move_scancode` | `0x23` | Scancode for attack-move key (default: End key) |
 
-14. **Configurable `dwExtraInfo` Mode**
-    - Supports `"native"` mode to attach valid hardware input signatures to simulated events or `"zero"` mode for standard raw zeroed input.
+### Target Detection
 
-15. **Direct2D Hardware-Accelerated Overlay**
-    - Optional transparent click-through debug overlay showing the capture boundary, detected target clusters, and calculated attack offsets in real time.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `target_color_r` | `52` | Target indicator color — Red component (0-255) |
+| `target_color_g` | `3` | Target indicator color — Green component |
+| `target_color_b` | `0` | Target indicator color — Blue component |
+| `color_tolerance` | `0` | Color matching tolerance (0 = exact match) |
+| `capture_size` | `1000` | Screen capture area size in pixels (centered on cursor) |
+| `min_cluster_pixels` | `10` | Minimum pixel count to consider a valid target |
+| `detection_fps_cap` | `60` | Max detection scans per second |
+| `target_offset_x` | `70` | Offset from detected cluster center to actual target X |
+| `target_offset_y` | `120` | Offset from detected cluster center to actual target Y |
+| `target_sticky_radius` | `50` | Pixels — ignore small target position changes (anti-jitter) |
 
-16. **Single-File Self-Contained Deployment**
-    - Packaged into a standalone single executable (`SidaAutoCarry.exe`) with all required native libraries bundled; no .NET runtime installation required.
+### Orbwalk Timing
 
----
+These control the attack → move cycle. Understanding the timeline:
+
+```
+|←────────────── Interval (1/AS) ───────────────→|
+|                                                  |
+|◄── Windup ──►|◄── Move window ──►|◄── Idle ──►|
+  (wait for      (right-click to      (wait for
+   animation)     kite/reposition)     cooldown)
+|               |                    |             |
+0ms          windup_ms          move_deadline   next_attack
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `max_windup_ms` | `100` | **Cap** windup wait time. After attack, wait this long before moving. Set per champion — too low cancels attack, too high wastes move time. `0` = use calculated value from game data |
+| `max_move_ms` | `300` | **Cap** move phase duration. Stop right-clicking after this many ms. `0` = move until next attack (no limit) |
+| `windup_buffer_ms` | `15` | Safety buffer added to calculated windup (network lag protection) |
+| `min_windup_buffer_ms` | `5` | Minimum buffer floor |
+| `windup_jitter_ms` | `5` | Random jitter on windup buffer (anti-detection) |
+| `min_input_delay_ms` | `75` | Minimum delay between each move-click in move phase |
+| `input_jitter_ms` | `15` | Random jitter on input delay |
+| `orbwalk_tick_rate_ms` | `1` | Orbwalk loop tick interval |
+| `attack_speed_poll_ms` | `500` | How often to poll Riot API for attack speed |
+
+#### Windup explained
+
+Windup is calculated dynamically from champion data + current attack speed:
+
+```
+base_windup = 0.3 / attack_speed  (simplified formula)
+buffered_windup = base_windup + buffer + jitter
+final_windup = min(buffered_windup, max_windup_ms)
+```
+
+| Attack Speed | Base Windup | With buffer |
+|-------------|-------------|-------------|
+| 0.625 | 480ms | 495ms |
+| 1.0 | 300ms | 315ms |
+| 1.5 | 200ms | 215ms |
+| 2.0 | 150ms | 165ms |
+| 2.5 | 120ms | 135ms |
+
+#### Move window explained
+
+Each move-click in the move window takes approximately:
+- Click hold: `click_hold_base_ms` ± `click_hold_jitter_ms` (~30-50ms)
+- Then wait: `min_input_delay_ms` ± `input_jitter_ms` (~75-90ms)
+- **Total per click: ~105-140ms**
+
+| `max_move_ms` | Clicks per cycle | Use case |
+|---------------|-----------------|----------|
+| `100` | ~1 | Minimal movement |
+| `200` | ~1-2 | Light kiting |
+| `300` | ~2-3 | Standard kiting |
+| `500` | ~4-5 | Heavy kiting |
+| `0` | Unlimited | Move until next attack |
+
+### Anti-Detection (Humanization)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enable_cursor_restore` | `true` | Restore cursor position after manual mode attack |
+| `enable_smooth_cursor` | `true` | Move cursor in steps instead of instant teleport |
+| `cursor_steps` | `3` | Number of intermediate cursor positions |
+| `cursor_move_ms` | `8` | Delay between cursor steps |
+| `key_hold_base_ms` | `40` | How long to hold attack key down |
+| `key_hold_jitter_ms` | `30` | Random jitter on key hold |
+| `click_hold_base_ms` | `30` | How long to hold right mouse button |
+| `click_hold_jitter_ms` | `20` | Random jitter on click hold |
+| `skip_move_chance` | `0.07` | 7% chance to skip a move-click (pattern scrambling) |
+| `extra_move_chance` | `0.05` | 5% chance to do an extra move-click (pattern scrambling) |
+
+### Kite Direction (Auto Mode)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `auto_kite_direction` | `false` | Enable kiting away from target in auto mode |
+| `kite_distance` | `200` | Pixels to move cursor away from target |
+
+### Other
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enable_overlay` | `false` | Show Direct2D overlay with detection boxes |
+| `extra_info_mode` | `"native"` | Extra info display mode |
+
+## Example `settings.json`
+
+```json
+{
+    "manual_key": 67,
+    "auto_key": 32,
+    "attack_move_scancode": 35,
+    "target_color_r": 52,
+    "target_color_g": 3,
+    "target_color_b": 0,
+    "color_tolerance": 0,
+    "capture_size": 1000,
+    "min_cluster_pixels": 10,
+    "detection_fps_cap": 60,
+    "target_offset_x": 70,
+    "target_offset_y": 120,
+    "enable_overlay": false,
+    "max_windup_ms": 100,
+    "max_move_ms": 300,
+    "windup_buffer_ms": 15,
+    "min_windup_buffer_ms": 5,
+    "windup_jitter_ms": 5,
+    "min_input_delay_ms": 75,
+    "input_jitter_ms": 15,
+    "orbwalk_tick_rate_ms": 1,
+    "attack_speed_poll_ms": 500,
+    "enable_cursor_restore": true,
+    "enable_smooth_cursor": true,
+    "cursor_steps": 3,
+    "cursor_move_ms": 8,
+    "key_hold_base_ms": 40,
+    "key_hold_jitter_ms": 30,
+    "click_hold_base_ms": 30,
+    "click_hold_jitter_ms": 20,
+    "skip_move_chance": 0.07,
+    "extra_move_chance": 0.05,
+    "auto_kite_direction": false,
+    "kite_distance": 200,
+    "target_sticky_radius": 50,
+    "extra_info_mode": "native"
+}
+```
 
 ## Architecture
 
 ```
-                       +----------------------------------------+
-                       |      League of Legends Game Client     |
-                       |  - Borderless / Windowed Mode          |
-                       |  - Live Client Data API (Port 2999)    |
-                       +-------------------+--------------------+
-                                           |
-                  +------------------------+------------------------+
-                  | (VRAM Desktop Dup)                              | (HTTPS GET stats)
-                  v                                                 v
-        +-------------------+                             +--------------------+
-        |   DxgiCapturer    |                             |  CommunityDragon / |
-        |  (Direct3D 11)    |                             |  Live Client API   |
-        +---------+---------+                             +----------+---------+
-                  | BGRA Frame                                       | Attack Speed,
-                  v                                                  | Base Delay, Ratio
-        +-------------------+                                        v
-        |   ColorMatcher    |                             +--------------------+
-        |  (RGB Tolerance)  |                             | PrecisionTimer &   |
-        +---------+---------+                             | Windup Calculator  |
-                  | Pixel Matches                         +----------+---------+
-                  v                                                  |
-        +-------------------+                                        |
-        |   ClusterFinder   |                                        |
-        |   (BFS Engine)    |                                        |
-        +---------+---------+                                        |
-                  | Target Coords                                    |
-                  +-----------------------+  +-----------------------+
-                                          |  |
-                                          v  v
-                             +-----------------------------+
-                             |     OrbWalkLoopAsync        |
-                             |  - ManualStrategy           |
-                             |  - AutoStrategy             |
-                             |  - Anti-Detect Humanizer    |
-                             +--------------+--------------+
-                                            |
-                                            v
-                             +-----------------------------+
-                             |        InputManager         |
-                             |  - LowLevelInput Hooks      |
-                             |  - SendInput DirectInput    |
-                             +-----------------------------+
+cpp/
+├── CMakeLists.txt
+├── CMakePresets.json
+├── vcpkg.json
+├── app.rc                      # App icon resource
+├── res/app.ico                 # App icon
+├── src/
+│   ├── main.cpp                # Orchestrator — all async loops
+│   ├── core/
+│   │   ├── settings.h/.cpp     # JSON settings (nlohmann/json)
+│   │   ├── timing_jitter.h/.cpp # Thread-safe random jitter
+│   │   └── direct_input_keys.h  # DirectInput key codes
+│   ├── input/
+│   │   ├── input_simulator.h/.cpp  # SendInput wrapper
+│   │   ├── input_hooks.h/.cpp      # WH_KEYBOARD_LL global hooks
+│   │   └── mouse_helper.h/.cpp     # GetCursorPos wrapper
+│   ├── capture/
+│   │   └── dxgi_capturer.h/.cpp    # DXGI Desktop Duplication
+│   ├── detection/
+│   │   ├── color_matcher.h/.cpp    # BGRA pixel color scan
+│   │   └── cluster_finder.h/.cpp   # 8-way BFS clustering
+│   ├── strategy/
+│   │   ├── orbwalk_strategy.h      # IOrbWalkStrategy interface
+│   │   ├── auto_strategy.h/.cpp    # Auto mode (detect + attack)
+│   │   ├── manual_strategy.h/.cpp  # Manual mode (cursor save/restore)
+│   │   └── strategy_factory.h/.cpp # Factory
+│   ├── net/
+│   │   └── riot_api_client.h/.cpp  # Riot Client API + CommunityDragon
+│   ├── overlay/
+│   │   ├── overlay_window.h/.cpp   # WS_EX_LAYERED transparent window
+│   │   └── overlay_renderer.h/.cpp # Direct2D render loop
+│   └── models/
+│       ├── capture_result.h
+│       ├── color_match.h
+│       ├── color_cluster.h
+│       └── detected_box.h
+└── tests/                      # Google Test (22 tests)
 ```
 
----
+## License
 
-## Settings Reference
-
-The configuration file is automatically generated at `settings/settings.json` on first launch.
-
-| Setting | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `ManualKey` | `int` | `67` | Virtual key code for **Manual Mode** (`67` = `C`). Only attacks when a target is detected. |
-| `AutoKey` | `int` | `32` | Virtual key code for **Auto Mode** (`32` = `Space`). Continuously attacks and moves. |
-| `TargetColorR` | `int` | `52` | Red channel value (0–255) for target pixel identification. |
-| `TargetColorG` | `int` | `3` | Green channel value (0–255) for target pixel identification. |
-| `TargetColorB` | `int` | `0` | Blue channel value (0–255) for target pixel identification. |
-| `ColorTolerance` | `int` | `10` | Maximum absolute channel difference for matching target pixels. |
-| `CaptureSize` | `int` | `1000` | Width and height (in pixels) of the screen center region captured via DXGI. |
-| `MinClusterPixels` | `int` | `10` | Minimum connected matching pixels required to register a valid target cluster. |
-| `DetectionFpsCap` | `int` | `60` | Maximum frame rate for the screen capture and vision detection loop. |
-| `TargetOffsetX` | `int` | `70` | Horizontal pixel offset from detected feature (e.g. health bar edge) to champion center. |
-| `TargetOffsetY` | `int` | `120` | Vertical pixel offset from detected feature to champion center. |
-| `EnableOverlay` | `bool` | `false` | Enables the Direct2D transparent debug overlay window. |
-| `WindupBufferMs` | `int` | `66` | Base safety margin (in milliseconds) added to champion attack windup. |
-| `MinInputDelayMs` | `int` | `75` | Minimum delay (in milliseconds) between successive movement inputs. |
-| `OrbWalkTickRateMs`| `int` | `1` | Polling resolution (in milliseconds) for the main orb-walker loop. |
-| `AttackSpeedPollMs`| `int` | `500` | Interval (in milliseconds) to poll current attack speed from Live Client Data API. |
-| `EnableCursorRestore` | `bool` | `true` | Restores mouse cursor back to original user position immediately after attacking. |
-| `InputJitterMs` | `int` | `15` | Symmetrical timing variance (`±N` ms) applied to movement click delays. |
-| `WindupJitterMs` | `int` | `10` | Positive timing jitter (`+0..N` ms) applied to attack windup calculations. |
-| `AttackMoveScancode` | `int` | `0x23` | DirectInput scancode for Attack Move (`0x23` = DIK_H, `0x1E` = DIK_A). |
-| `KeyHoldBaseMs` | `int` | `40` | Base duration (in milliseconds) keys are held down before release. |
-| `KeyHoldJitterMs` | `int` | `30` | Symmetrical variance (`±N` ms) applied to key hold durations. |
-| `ClickHoldBaseMs` | `int` | `30` | Base duration (in milliseconds) mouse buttons are held down before release. |
-| `ClickHoldJitterMs` | `int` | `20` | Symmetrical variance (`±N` ms) applied to mouse click hold durations. |
-| `MinWindupBufferMs` | `int` | `15` | Minimum clamp floor for the adaptive windup buffer at high attack speeds. |
-| `EnableSmoothCursor`| `bool` | `true` | Enables multi-step interpolated mouse movement to target and restore positions. |
-| `CursorSteps` | `int` | `3` | Number of interpolation sub-steps for smooth cursor movement. |
-| `CursorMoveMs` | `int` | `8` | Total duration (in milliseconds) of smooth cursor transit. |
-| `AutoKiteDirection` | `bool` | `false` | In Auto Mode, automatically moves champion away from target instead of to cursor. |
-| `KiteDistance` | `int` | `200` | Distance (in pixels) to move along the retreat vector in Auto Kite mode. |
-| `TargetStickyRadius`| `int` | `50` | Hysteresis distance (in pixels) to maintain lock on current target cluster. |
-| `SkipMoveChance` | `double` | `0.07` | Probability (`0.0`–`1.0`) of skipping a move command tick (7% human variance). |
-| `ExtraMoveChance` | `double` | `0.05` | Probability (`0.0`–`1.0`) of injecting an additional micro-movement click (5% jitter). |
-| `ExtraInfoMode` | `string` | `"native"` | `dwExtraInfo` signature mode for simulated input (`"native"` or `"zero"`). |
-
----
-
-## Prerequisites & In-Game Configuration
-
-1. **Display Mode:**
-   - Set League of Legends video mode to **Borderless** or **Windowed**. DXGI Desktop Duplication requires the desktop compositor to be active.
-2. **Key Bindings:**
-   - In League of Legends Hotkey settings, bind **Player Attack Move** or **Player Attack Move Click** to the key corresponding to `AttackMoveScancode`. By default, `0x23` is the DirectInput scancode for `H`.
-   - If you prefer `A`, set `AttackMoveScancode` to `30` (`0x1E`).
-3. **Live Client Data API:**
-   - League of Legends enables this API by default on `https://127.0.0.1:2999/liveclientdata/activeplayer`. Ensure no third-party firewall blocks local loopback communication.
-4. **Color Calibration:**
-   - Default target color `RGB(52, 3, 0)` is tuned for the enemy health bar / level circle.
-   - Adjust `TargetOffsetX` and `TargetOffsetY` depending on your resolution and champion scale to ensure the attack cursor lands on the champion's hitbox.
-
----
-
-## Getting Started
-
-### 1. Launching
-1. Run `SidaAutoCarry.exe` (or run via `dotnet run --project auto-kite\auto-kite.csproj`).
-2. Start or alt-tab into your League of Legends match (Practice Tool, ARAM, or Summoner's Rift).
-3. The console will display detected champion statistics once the match begins:
-   ```
-   [OK] League process found — starting attack speed polling...
-   Connected: Jinx (Base AS: 0.625, Windup Delay: 0.3)
-   ```
-
-### 2. Basic Controls
-- **Hold `C` (Manual Mode):** Move your mouse cursor as normal. The bot moves to your mouse and attacks when an enemy is within detection range.
-- **Hold `Space` (Auto Mode):** The bot will continuously attack move. If an enemy is detected, it will focus the enemy; if `AutoKiteDirection` is true, it will kite away from the enemy automatically.
-- **Release Key:** Immediately cancels orb-walking and returns full manual control to your mouse and keyboard.
-
----
-
-## Building & Publishing
-
-### Requirements
-- [.NET 10.0 SDK](https://dotnet.microsoft.com/download) (Windows x64)
-- Windows 10/11 64-bit
-
-### Build Debug / Run Tests
-```powershell
-# Run the complete test suite
-dotnet test auto-kite.sln -v n
-
-# Build solution in Debug configuration
-dotnet build auto-kite.sln
-```
-
-### Build Release
-```powershell
-dotnet build auto-kite.sln -c Release
-```
-
-### Publish Single-File Executable
-```powershell
-dotnet publish auto-kite\auto-kite.csproj -c Release -r win-x64 --self-contained true
-```
-The compiled, self-contained standalone executable will be located at:
-```
-auto-kite\bin\Release\net10.0-windows\win-x64\publish\SidaAutoCarry.exe
-```
-
----
-
-## Anti-Detection & Humanization Details
-
-Modern anti-cheat systems analyze input entropy, mouse kinematics, and periodicity to distinguish human play from automated scripts. Auto-Kite incorporates multiple defenses against heuristic profiling:
-
-1. **Non-Invasive Architecture:**
-   - Operates completely out-of-process.
-   - Zero memory writes, zero DLL injection, zero API hooks into game code.
-2. **Kinematic Mouse Smoothing:**
-   - Attacks smoothly traverse intermediate points rather than teleporting instantly in 1 millisecond.
-3. **Temporal Entropy:**
-   - Movement tick delays, windup safety buffers, key down periods, and mouse clicks all undergo bounded random variations.
-4. **Behavioral Irregularity:**
-   - Configurable probabilities (`SkipMoveChance` and `ExtraMoveChance`) inject natural human imperfection, preventing continuous uniform clicking cadences.
-5. **Adaptive Mechanics:**
-   - Windup times automatically scale with attack speed changes (items, levels, buffs), keeping actions within believable human reaction windows.
-
----
-
-## Troubleshooting
-
-- **Bot not attacking:**
-  - Verify that your in-game Attack Move binding matches `AttackMoveScancode` (default `0x23` = `H`).
-  - Check that the game is running in Borderless or Windowed mode.
-  - Set `EnableOverlay: true` in `settings.json` to visually confirm whether enemy clusters are being detected.
-- **Bot attacks too early / cancels attacks:**
-  - Increase `WindupBufferMs` (e.g., from `66` to `80` or `100`).
-  - Ensure high ping or packet loss is compensated by a higher windup buffer.
-- **Target not recognized:**
-  - Verify your enemy health bar color. If colorblind mode is active, adjust `TargetColorR`, `TargetColorG`, and `TargetColorB` or increase `ColorTolerance`.
-- **API not connecting:**
-  - Test opening `https://127.0.0.1:2999/liveclientdata/activeplayer` in your browser while in a game. Accept any self-signed SSL warning.
-
----
-
-## Disclaimer
-
-This software is for educational, research, and concept exploration purposes only. Using third-party automation tools or bots in League of Legends violates Riot Games' Terms of Service and can result in permanent account suspension. Use at your own risk.
+See [LICENSE](LICENSE).
