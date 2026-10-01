@@ -97,13 +97,16 @@ void OverlayRenderer::render_loop(std::stop_token stop) {
         target_->Clear(D2D1::ColorF(0, 0, 0, 0));
 
         // Draw scan region (cyan)
+        float x_offset = static_cast<float>(GetSystemMetrics(SM_XVIRTUALSCREEN));
+        float y_offset = static_cast<float>(GetSystemMetrics(SM_YVIRTUALSCREEN));
+
         if (scan.right > scan.left && scan.bottom > scan.top) {
             auto* cyan = get_brush(RGB(0, 255, 255));
             D2D1_RECT_F r = {
-                static_cast<float>(scan.left),
-                static_cast<float>(scan.top),
-                static_cast<float>(scan.right),
-                static_cast<float>(scan.bottom)
+                static_cast<float>(scan.left) - x_offset,
+                static_cast<float>(scan.top) - y_offset,
+                static_cast<float>(scan.right) - x_offset,
+                static_cast<float>(scan.bottom) - y_offset
             };
             target_->DrawRectangle(r, cyan, 1.0f);
         }
@@ -112,10 +115,10 @@ void OverlayRenderer::render_loop(std::stop_token stop) {
         for (const auto& box : boxes) {
             auto* brush = get_brush(box.border_color);
             D2D1_RECT_F r = {
-                static_cast<float>(box.screen_rect.left),
-                static_cast<float>(box.screen_rect.top),
-                static_cast<float>(box.screen_rect.right),
-                static_cast<float>(box.screen_rect.bottom)
+                static_cast<float>(box.screen_rect.left) - x_offset,
+                static_cast<float>(box.screen_rect.top) - y_offset,
+                static_cast<float>(box.screen_rect.right) - x_offset,
+                static_cast<float>(box.screen_rect.bottom) - y_offset
             };
             target_->DrawRectangle(r, brush, 2.0f);
         }

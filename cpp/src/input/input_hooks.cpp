@@ -6,8 +6,12 @@ void InputHooks::start(KeyboardCallback on_keyboard) {
     on_keyboard_ = std::move(on_keyboard);
     s_instance_ = this;
     running_ = true;
+    init_ready_ = false;
 
     hook_thread_ = std::thread(&InputHooks::hook_thread_proc, this);
+
+    std::unique_lock<std::mutex> lock(init_mtx_);
+    init_cv_.wait(lock, [this]() { return init_ready_; });
 }
 
 void InputHooks::stop() {
@@ -26,10 +30,18 @@ InputHooks::~InputHooks() {
 void InputHooks::hook_thread_proc() {
     hook_thread_id_ = GetCurrentThreadId();
 
+    MSG msg;
+    PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+
     kb_hook_ = SetWindowsHookExW(
         WH_KEYBOARD_LL, keyboard_proc, nullptr, 0);
 
-    MSG msg;
+    {
+        std::lock_guard<std::mutex> lock(init_mtx_);
+        init_ready_ = true;
+    }
+    init_cv_.notify_one();
+
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);

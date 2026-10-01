@@ -3,6 +3,8 @@
 #include <functional>
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
 
 class InputHooks {
 public:
@@ -22,6 +24,10 @@ private:
     DWORD hook_thread_id_{};
     HHOOK kb_hook_{};
     std::atomic<bool> running_{false};
+
+    std::mutex init_mtx_;
+    std::condition_variable init_cv_;
+    bool init_ready_{false};
 
     static InputHooks* s_instance_;
 };
