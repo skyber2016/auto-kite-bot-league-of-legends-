@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include <Windows.h>
 #include <iostream>
+#include <iomanip>
 #include <thread>
 #include <atomic>
 #include <chrono>
@@ -271,8 +272,32 @@ static void api_polling_loop(std::stop_token stop) {
                 try {
                     auto& j = *data;
                     double as = j["championStats"]["attackSpeed"].get<double>();
+                    double prev_as = g_attack_speed.load();
                     g_attack_speed = as;
-                    g_has_attack_speed = true;
+
+                    if (!g_has_attack_speed.load()) {
+                        g_has_attack_speed = true;
+                        double spa = get_seconds_per_attack();
+                        double windup = get_windup_duration();
+                        double buffered = get_buffered_windup();
+                        std::cout << "[AS] Ready: " << std::fixed << std::setprecision(3) << as
+                                  << " | Interval: " << static_cast<int>(spa * 1000) << "ms"
+                                  << " | Windup: " << static_cast<int>(windup * 1000) << "ms"
+                                  << " + " << g_settings.windup_buffer_ms << "ms buf = "
+                                  << static_cast<int>(buffered * 1000) << "ms"
+                                  << " | Move: " << static_cast<int>((spa - buffered) * 1000) << "ms"
+                                  << std::endl;
+                    } else if (std::abs(as - prev_as) > 0.001) {
+                        double spa = get_seconds_per_attack();
+                        double windup = get_windup_duration();
+                        double buffered = get_buffered_windup();
+                        std::cout << "[AS] " << std::fixed << std::setprecision(3) << as
+                                  << " | Interval: " << static_cast<int>(spa * 1000) << "ms"
+                                  << " | Windup: " << static_cast<int>(windup * 1000) << "ms"
+                                  << " + buf = " << static_cast<int>(buffered * 1000) << "ms"
+                                  << " | Move: " << static_cast<int>((spa - buffered) * 1000) << "ms"
+                                  << std::endl;
+                    }
 
                     // Load champion data once
                     static bool loaded_champ = false;
@@ -465,10 +490,39 @@ int main() {
     g_orbwalk_thread = std::jthread(orbwalk_loop);
     g_api_thread = std::jthread(api_polling_loop);
 
-    std::cout << "\n=== SidaAutoCarry C++ ===\n";
-    std::cout << "Manual: hold key " << g_settings.manual_key << "\n";
-    std::cout << "Auto:   hold key " << g_settings.auto_key << "\n";
-    std::cout << "Press Ctrl+C to exit\n\n";
+    std::cout << "\n=== SidaAutoCarry C++ ===" << std::endl;
+    std::cout << "\n[Config] Keys:" << std::endl;
+    std::cout << "  Manual key:     VK " << g_settings.manual_key << std::endl;
+    std::cout << "  Auto key:       VK " << g_settings.auto_key << std::endl;
+    std::cout << "  Attack scancode: 0x" << std::hex << g_settings.attack_move_scancode << std::dec << std::endl;
+    std::cout << "  Toggle attack:  M" << std::endl;
+
+    std::cout << "\n[Config] Timing:" << std::endl;
+    std::cout << "  Orbwalk tick:   " << g_settings.orbwalk_tick_rate_ms << "ms" << std::endl;
+    std::cout << "  Windup buffer:  " << g_settings.windup_buffer_ms << "ms" << std::endl;
+    std::cout << "  Min buffer:     " << g_settings.min_windup_buffer_ms << "ms" << std::endl;
+    std::cout << "  Windup jitter:  " << g_settings.windup_jitter_ms << "ms" << std::endl;
+    std::cout << "  Input delay:    " << g_settings.min_input_delay_ms << "ms +/- " << g_settings.input_jitter_ms << "ms" << std::endl;
+    std::cout << "  Click hold:     " << g_settings.click_hold_base_ms << "ms +/- " << g_settings.click_hold_jitter_ms << "ms" << std::endl;
+    std::cout << "  Key hold:       " << g_settings.key_hold_base_ms << "ms +/- " << g_settings.key_hold_jitter_ms << "ms" << std::endl;
+
+    std::cout << "\n[Config] Detection:" << std::endl;
+    std::cout << "  Target color:   RGB(" << (int)g_settings.target_color_r << ", " << (int)g_settings.target_color_g << ", " << (int)g_settings.target_color_b << ")" << std::endl;
+    std::cout << "  Tolerance:      " << g_settings.color_tolerance << std::endl;
+    std::cout << "  Min pixels:     " << g_settings.min_cluster_pixels << std::endl;
+    std::cout << "  Capture size:   " << g_settings.capture_size << "px" << std::endl;
+    std::cout << "  Detect FPS cap: " << g_settings.detection_fps_cap << std::endl;
+
+    std::cout << "\n[Config] Features:" << std::endl;
+    std::cout << "  Overlay:        " << (g_settings.enable_overlay ? "ON" : "OFF") << std::endl;
+    std::cout << "  Kite direction: " << (g_settings.auto_kite_direction ? "ON" : "OFF") << std::endl;
+    std::cout << "  Kite distance:  " << g_settings.kite_distance << "px" << std::endl;
+    std::cout << "  Skip move:      " << (g_settings.skip_move_chance * 100) << "%" << std::endl;
+    std::cout << "  Extra move:     " << (g_settings.extra_move_chance * 100) << "%" << std::endl;
+    std::cout << "  Cursor restore: " << (g_settings.enable_cursor_restore ? "ON" : "OFF") << std::endl;
+    std::cout << "  Smooth cursor:  " << (g_settings.enable_smooth_cursor ? "ON" : "OFF") << std::endl;
+
+    std::cout << "\nPress Ctrl+C to exit\n" << std::endl;
 
     // Wait for exit
     while (g_running.load()) {
