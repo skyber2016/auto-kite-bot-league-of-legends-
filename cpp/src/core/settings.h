@@ -25,7 +25,7 @@ struct Settings {
 
     // Orb-walk timings
     int windup_buffer_ms = 15;
-    int max_windup_ms = 150;
+    int max_windup_ms = 100;
     int min_input_delay_ms = 75;
     int orbwalk_tick_rate_ms = 1;
     int attack_speed_poll_ms = 500;
