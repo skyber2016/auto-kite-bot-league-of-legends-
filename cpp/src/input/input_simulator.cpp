@@ -45,6 +45,22 @@ void InputSimulator::send_move_click(ULONG_PTR extra) {
     SendInput(2, inputs, sizeof(INPUT));
 }
 
+void InputSimulator::send_mouse_down_right(ULONG_PTR extra) {
+    INPUT input{};
+    input.type = INPUT_MOUSE;
+    input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
+    input.mi.dwExtraInfo = extra;
+    SendInput(1, &input, sizeof(INPUT));
+}
+
+void InputSimulator::send_mouse_up_right(ULONG_PTR extra) {
+    INPUT input{};
+    input.type = INPUT_MOUSE;
+    input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
+    input.mi.dwExtraInfo = extra;
+    SendInput(1, &input, sizeof(INPUT));
+}
+
 void InputSimulator::send_move_and_key_down(int x, int y, uint16_t scancode, ULONG_PTR extra) {
     int sw = screen_width(), sh = screen_height();
     if (sw <= 0) sw = 1;

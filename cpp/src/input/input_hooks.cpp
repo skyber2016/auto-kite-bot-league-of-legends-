@@ -57,10 +57,9 @@ LRESULT CALLBACK InputHooks::keyboard_proc(int code, WPARAM wp, LPARAM lp) {
     if (code >= 0 && s_instance_ && s_instance_->on_keyboard_) {
         auto* info = reinterpret_cast<KBDLLHOOKSTRUCT*>(lp);
         bool key_down = (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN);
-        // Dispatch async to avoid stalling the hook chain
-        auto cb = s_instance_->on_keyboard_;
         int vk = static_cast<int>(info->vkCode);
-        std::thread([cb, vk, key_down]() { cb(vk, key_down); }).detach();
+        // Invoke directly — callback only does atomic compare-exchange
+        s_instance_->on_keyboard_(vk, key_down);
     }
     return CallNextHookEx(nullptr, code, wp, lp);
 }

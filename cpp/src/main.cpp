@@ -179,79 +179,84 @@ static void detection_loop(std::stop_token stop) {
 
 // ── OrbWalk Loop ──
 static void orbwalk_loop(std::stop_token stop) {
-    auto interval = std::chrono::milliseconds(g_settings.orbwalk_tick_rate_ms);
-    auto last_attack = std::chrono::steady_clock::now()
-                       - std::chrono::seconds(10);
+    auto next_attack = std::chrono::steady_clock::now();
+    auto next_move = next_attack;
+    auto next_input = next_attack;
+
+    auto interval = std::chrono::milliseconds(std::max(1, g_settings.orbwalk_tick_rate_ms));
 
     while (!stop.stop_requested()) {
-        auto start = std::chrono::steady_clock::now();
+        std::this_thread::sleep_for(interval);
 
-        if (!is_league_foreground()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
+        if (!is_league_foreground()) continue;
 
         auto mode = g_active_mode.load();
-
-        if (mode == OrbWalkMode::None || !g_has_attack_speed.load()) {
-            std::this_thread::sleep_for(interval);
-            continue;
-        }
+        if (mode == OrbWalkMode::None) continue;
+        if (!g_has_process.load() || !g_has_attack_speed.load()) continue;
 
         auto* strategy = OrbWalkStrategyFactory::get(mode);
-        if (!strategy) {
-            std::this_thread::sleep_for(interval);
-            continue;
-        }
-
-        double buffered_windup = get_buffered_windup();
-        double spa = get_seconds_per_attack();
+        if (!strategy) continue;
 
         auto now = std::chrono::steady_clock::now();
-        double since_attack = std::chrono::duration<double>(
-            now - last_attack).count();
+        bool has_target = g_has_target.load();
+        int tx = g_target_x.load();
+        int ty = g_target_y.load();
+        uint16_t scancode = static_cast<uint16_t>(g_settings.attack_move_scancode);
 
-        if (since_attack >= spa) {
-            // Attack phase
-            bool has = g_has_target.load();
-            int tx = g_target_x.load(), ty = g_target_y.load();
-
-            bool attacked = strategy->try_attack(
-                has, tx, ty,
-                g_settings.attack_move_scancode, g_settings);
-
-            if (attacked) {
-                last_attack = std::chrono::steady_clock::now();
-                // Wait for windup
-                int windup_ms = static_cast<int>(buffered_windup * 1000);
-                if (windup_ms > 0)
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(windup_ms));
-            }
-        } else if (since_attack >= buffered_windup) {
-            // Move phase
-            double roll = TimingJitter::next_double();
-            if (roll >= g_settings.skip_move_chance) {
-                InputSimulator::send_move_click();
-                int delay = TimingJitter::apply(
-                    g_settings.min_input_delay_ms,
-                    g_settings.input_jitter_ms);
-                if (delay > 0)
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(delay));
-
-                // Extra move chance
-                if (TimingJitter::next_double() < g_settings.extra_move_chance) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(
-                        TimingJitter::apply(20, 10)));
-                    InputSimulator::send_move_click();
-                }
+        // Attack phase
+        if (now >= next_attack) {
+            if (strategy->try_attack(has_target, tx, ty, scancode, g_settings)) {
+                auto attack_time = std::chrono::steady_clock::now();
+                double buffered_windup = get_buffered_windup();
+                double spa = get_seconds_per_attack();
+                next_move = attack_time + std::chrono::microseconds(static_cast<int64_t>(buffered_windup * 1e6));
+                next_attack = attack_time + std::chrono::microseconds(static_cast<int64_t>(spa * 1e6));
+                continue;
             }
         }
 
-        auto elapsed = std::chrono::steady_clock::now() - start;
-        if (elapsed < interval)
-            std::this_thread::sleep_for(interval - elapsed);
+        // Move phase — throttled by next_move and next_input
+        if (now >= next_move && now >= next_input) {
+            // Feature 9: Pattern Scrambling — skip move chance
+            double roll = TimingJitter::next_double();
+            if (roll < g_settings.skip_move_chance) {
+                int delay = TimingJitter::apply(g_settings.min_input_delay_ms, g_settings.input_jitter_ms);
+                next_input = now + std::chrono::milliseconds(delay);
+                continue;
+            }
+
+            // Feature 7: Kite Direction (Auto mode only)
+            if (g_settings.auto_kite_direction && mode == OrbWalkMode::Auto && has_target) {
+                POINT cursor = MouseHelper::get_cursor_position();
+                double dx = static_cast<double>(cursor.x) - tx;
+                double dy = static_cast<double>(cursor.y) - ty;
+                double len = std::sqrt(dx * dx + dy * dy);
+                if (len > 1.0) {
+                    int move_x = cursor.x + static_cast<int>(dx / len * g_settings.kite_distance);
+                    int move_y = cursor.y + static_cast<int>(dy / len * g_settings.kite_distance);
+                    InputSimulator::set_cursor_position(move_x, move_y);
+                }
+            }
+
+            // Feature 4: Humanized move-click — MouseDown, delay, MouseUp
+            InputSimulator::send_mouse_down_right();
+            int hold_ms = TimingJitter::apply(g_settings.click_hold_base_ms, g_settings.click_hold_jitter_ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(hold_ms));
+            InputSimulator::send_mouse_up_right();
+
+            // Feature 9: Extra move chance
+            if (roll > 1.0 - g_settings.extra_move_chance) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(TimingJitter::apply(15, 10)));
+                InputSimulator::send_mouse_down_right();
+                std::this_thread::sleep_for(std::chrono::milliseconds(
+                    TimingJitter::apply(g_settings.click_hold_base_ms, g_settings.click_hold_jitter_ms)));
+                InputSimulator::send_mouse_up_right();
+            }
+
+            // Feature 2: Jittered input delay
+            int input_delay = TimingJitter::apply(g_settings.min_input_delay_ms, g_settings.input_jitter_ms);
+            next_input = now + std::chrono::milliseconds(input_delay);
+        }
     }
 }
 
