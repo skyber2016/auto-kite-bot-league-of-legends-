@@ -76,9 +76,10 @@ static double get_buffered_windup() {
     int buffered_ms = TimingJitter::apply_positive(adaptive_ms,
                                                     g_settings.windup_jitter_ms);
     double total = windup + buffered_ms / 1000.0;
-    // Cap windup if max_windup_ms is set
+    // Cap total windup — but never below actual windup (would cancel attack)
     if (g_settings.max_windup_ms > 0) {
-        total = std::min(total, g_settings.max_windup_ms / 1000.0);
+        double cap = std::max(windup, g_settings.max_windup_ms / 1000.0);
+        total = std::min(total, cap);
     }
     return total;
 }
