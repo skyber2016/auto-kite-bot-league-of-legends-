@@ -42,6 +42,7 @@ static std::atomic<double> g_attack_delay_scaling{1.0};
 static std::atomic<double> g_attack_cast_time{0.0};
 
 static std::atomic<OrbWalkMode> g_active_mode{OrbWalkMode::None};
+static std::atomic<bool> g_auto_attack_enabled{true};
 static std::jthread g_detection_thread;
 static std::jthread g_orbwalk_thread;
 static std::jthread g_api_thread;
@@ -203,8 +204,9 @@ static void orbwalk_loop(std::stop_token stop) {
         int ty = g_target_y.load();
         uint16_t scancode = static_cast<uint16_t>(g_settings.attack_move_scancode);
 
-        // Attack phase
-        if (now >= next_attack) {
+        // Attack phase (skip if auto-attack disabled via M toggle in Auto mode)
+        bool attack_allowed = g_auto_attack_enabled.load() || mode != OrbWalkMode::Auto;
+        if (attack_allowed && now >= next_attack) {
             if (strategy->try_attack(has_target, tx, ty, scancode, g_settings)) {
                 auto attack_time = std::chrono::steady_clock::now();
                 double buffered_windup = get_buffered_windup();
@@ -404,6 +406,10 @@ static void on_keyboard(int vk, bool down) {
             g_active_mode.compare_exchange_strong(expected,
                                                    OrbWalkMode::None);
         }
+    } else if (vk == 0x4D && down) { // M key — toggle auto-attack
+        bool prev = g_auto_attack_enabled.load();
+        g_auto_attack_enabled.store(!prev);
+        std::cout << "[Toggle] Auto-attack: " << (!prev ? "ON" : "OFF") << std::endl;
     }
 }
 
