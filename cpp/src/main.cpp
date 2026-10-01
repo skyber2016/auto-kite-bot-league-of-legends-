@@ -75,7 +75,12 @@ static double get_buffered_windup() {
         static_cast<int>(g_settings.windup_buffer_ms * scale));
     int buffered_ms = TimingJitter::apply_positive(adaptive_ms,
                                                     g_settings.windup_jitter_ms);
-    return windup + buffered_ms / 1000.0;
+    double total = windup + buffered_ms / 1000.0;
+    // Cap windup if max_windup_ms is set
+    if (g_settings.max_windup_ms > 0) {
+        total = std::min(total, g_settings.max_windup_ms / 1000.0);
+    }
+    return total;
 }
 
 // ── Process Check ──
@@ -505,6 +510,7 @@ int main() {
     std::cout << "  Windup buffer:  " << g_settings.windup_buffer_ms << "ms" << std::endl;
     std::cout << "  Min buffer:     " << g_settings.min_windup_buffer_ms << "ms" << std::endl;
     std::cout << "  Windup jitter:  " << g_settings.windup_jitter_ms << "ms" << std::endl;
+    std::cout << "  Max windup:     " << g_settings.max_windup_ms << "ms" << std::endl;
     std::cout << "  Input delay:    " << g_settings.min_input_delay_ms << "ms +/- " << g_settings.input_jitter_ms << "ms" << std::endl;
     std::cout << "  Click hold:     " << g_settings.click_hold_base_ms << "ms +/- " << g_settings.click_hold_jitter_ms << "ms" << std::endl;
     std::cout << "  Key hold:       " << g_settings.key_hold_base_ms << "ms +/- " << g_settings.key_hold_jitter_ms << "ms" << std::endl;
