@@ -11,3 +11,5 @@
 
 # SDD scratch & workspace
 .superpowers/
+
+.worktrees/
