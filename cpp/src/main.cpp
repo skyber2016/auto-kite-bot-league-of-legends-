@@ -434,7 +434,10 @@ static void on_keyboard(int vk, bool down) {
     } else if (vk == 0x4D && down) { // M key — toggle target detection
         bool prev = g_detection_enabled.load();
         g_detection_enabled.store(!prev);
-        std::cout << "[Toggle] Detection: " << (!prev ? "ON" : "OFF") << std::endl;
+        bool now_on = !prev;
+        std::cout << "[Toggle] Detection: " << (now_on ? "ON" : "OFF") << std::endl;
+        // Audio feedback — high beep = ON, low beep = OFF
+        Beep(now_on ? 800 : 400, 150);
     }
 }
 
