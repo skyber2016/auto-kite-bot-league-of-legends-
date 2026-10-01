@@ -26,6 +26,7 @@ struct Settings {
     // Orb-walk timings
     int windup_buffer_ms = 15;
     int max_windup_ms = 100;
+    int max_move_ms = 300;
     int min_input_delay_ms = 75;
     int orbwalk_tick_rate_ms = 1;
     int attack_speed_poll_ms = 500;
@@ -60,7 +61,7 @@ struct Settings {
         color_tolerance, capture_size, min_cluster_pixels,
         detection_fps_cap, target_offset_x, target_offset_y,
         enable_overlay,
-        windup_buffer_ms, max_windup_ms, min_input_delay_ms, orbwalk_tick_rate_ms,
+        windup_buffer_ms, max_windup_ms, max_move_ms, min_input_delay_ms, orbwalk_tick_rate_ms,
         attack_speed_poll_ms,
         enable_cursor_restore, input_jitter_ms, windup_jitter_ms,
         attack_move_scancode, key_hold_base_ms, key_hold_jitter_ms,

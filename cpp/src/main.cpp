@@ -219,6 +219,11 @@ static void orbwalk_loop(std::stop_token stop) {
                 double spa = get_seconds_per_attack();
                 next_move = attack_time + std::chrono::microseconds(static_cast<int64_t>(buffered_windup * 1e6));
                 next_attack = attack_time + std::chrono::microseconds(static_cast<int64_t>(spa * 1e6));
+                // Cap move window
+                if (g_settings.max_move_ms > 0) {
+                    auto max_next = next_move + std::chrono::milliseconds(g_settings.max_move_ms);
+                    if (next_attack > max_next) next_attack = max_next;
+                }
                 continue;
             }
         }
@@ -511,6 +516,7 @@ int main() {
     std::cout << "  Min buffer:     " << g_settings.min_windup_buffer_ms << "ms" << std::endl;
     std::cout << "  Windup jitter:  " << g_settings.windup_jitter_ms << "ms" << std::endl;
     std::cout << "  Max windup:     " << g_settings.max_windup_ms << "ms" << std::endl;
+    std::cout << "  Max move:       " << g_settings.max_move_ms << "ms" << std::endl;
     std::cout << "  Input delay:    " << g_settings.min_input_delay_ms << "ms +/- " << g_settings.input_jitter_ms << "ms" << std::endl;
     std::cout << "  Click hold:     " << g_settings.click_hold_base_ms << "ms +/- " << g_settings.click_hold_jitter_ms << "ms" << std::endl;
     std::cout << "  Key hold:       " << g_settings.key_hold_base_ms << "ms +/- " << g_settings.key_hold_jitter_ms << "ms" << std::endl;
