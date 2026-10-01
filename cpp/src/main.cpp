@@ -278,6 +278,7 @@ static void api_polling_loop(std::stop_token stop) {
                             if (champ) {
                                 // Parse base attack values from CommunityDragon
                                 // (simplified — actual parsing depends on JSON structure)
+                                // TODO: Parse attackSpeedRatio, attackDelayOffsetPercent, etc. from CommunityDragon JSON
                                 loaded_champ = true;
                             }
                         }

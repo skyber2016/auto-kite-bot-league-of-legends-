@@ -5,6 +5,7 @@
 #pragma comment(lib, "d2d1.lib")
 
 void OverlayRenderer::start(HWND hwnd) {
+    hwnd_ = hwnd;
     if (!init_d2d(hwnd)) return;
     render_thread_ = std::jthread([this](std::stop_token st) {
         render_loop(st);
@@ -22,9 +23,12 @@ OverlayRenderer::~OverlayRenderer() {
 }
 
 bool OverlayRenderer::init_d2d(HWND hwnd) {
-    HRESULT hr = D2D1CreateFactory(
-        D2D1_FACTORY_TYPE_SINGLE_THREADED, factory_.GetAddressOf());
-    if (FAILED(hr)) return false;
+    hwnd_ = hwnd;
+    if (!factory_) {
+        HRESULT hr = D2D1CreateFactory(
+            D2D1_FACTORY_TYPE_SINGLE_THREADED, factory_.GetAddressOf());
+        if (FAILED(hr)) return false;
+    }
 
     RECT rc;
     GetClientRect(hwnd, &rc);
@@ -38,12 +42,14 @@ bool OverlayRenderer::init_d2d(HWND hwnd) {
         D2D1::HwndRenderTargetProperties(
             hwnd, D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top));
 
-    hr = factory_->CreateHwndRenderTarget(rtp, hrtp,
+    target_.Reset();
+    HRESULT hr = factory_->CreateHwndRenderTarget(rtp, hrtp,
                                            target_.GetAddressOf());
     return SUCCEEDED(hr);
 }
 
 ID2D1SolidColorBrush* OverlayRenderer::get_brush(COLORREF color) {
+    if (!target_) return nullptr;
     auto it = brush_cache_.find(color);
     if (it != brush_cache_.end())
         return it->second.Get();
@@ -84,6 +90,18 @@ void OverlayRenderer::render_loop(std::stop_token stop) {
     while (!stop.stop_requested()) {
         auto frame_start = steady_clock::now();
 
+        if (needs_reinit_) {
+            init_d2d(hwnd_);
+            needs_reinit_ = false;
+        }
+
+        if (!target_) {
+            auto elapsed = steady_clock::now() - frame_start;
+            if (elapsed < interval)
+                std::this_thread::sleep_for(interval - elapsed);
+            continue;
+        }
+
         // Snapshot state
         std::vector<DetectedBox> boxes;
         RECT scan;
@@ -102,31 +120,35 @@ void OverlayRenderer::render_loop(std::stop_token stop) {
 
         if (scan.right > scan.left && scan.bottom > scan.top) {
             auto* cyan = get_brush(RGB(0, 255, 255));
-            D2D1_RECT_F r = {
-                static_cast<float>(scan.left) - x_offset,
-                static_cast<float>(scan.top) - y_offset,
-                static_cast<float>(scan.right) - x_offset,
-                static_cast<float>(scan.bottom) - y_offset
-            };
-            target_->DrawRectangle(r, cyan, 1.0f);
+            if (cyan) {
+                D2D1_RECT_F r = {
+                    static_cast<float>(scan.left) - x_offset,
+                    static_cast<float>(scan.top) - y_offset,
+                    static_cast<float>(scan.right) - x_offset,
+                    static_cast<float>(scan.bottom) - y_offset
+                };
+                target_->DrawRectangle(r, cyan, 1.0f);
+            }
         }
 
         // Draw detected boxes
         for (const auto& box : boxes) {
             auto* brush = get_brush(box.border_color);
-            D2D1_RECT_F r = {
-                static_cast<float>(box.screen_rect.left) - x_offset,
-                static_cast<float>(box.screen_rect.top) - y_offset,
-                static_cast<float>(box.screen_rect.right) - x_offset,
-                static_cast<float>(box.screen_rect.bottom) - y_offset
-            };
-            target_->DrawRectangle(r, brush, 2.0f);
+            if (brush) {
+                D2D1_RECT_F r = {
+                    static_cast<float>(box.screen_rect.left) - x_offset,
+                    static_cast<float>(box.screen_rect.top) - y_offset,
+                    static_cast<float>(box.screen_rect.right) - x_offset,
+                    static_cast<float>(box.screen_rect.bottom) - y_offset
+                };
+                target_->DrawRectangle(r, brush, 2.0f);
+            }
         }
 
         HRESULT hr = target_->EndDraw();
         if (hr == D2DERR_RECREATE_TARGET) {
             brush_cache_.clear();
-            // Reinit would happen on next frame
+            needs_reinit_ = true;
         }
 
         auto elapsed = steady_clock::now() - frame_start;

@@ -24,6 +24,9 @@ private:
     bool init_d2d(HWND hwnd);
     ID2D1SolidColorBrush* get_brush(COLORREF color);
 
+    HWND hwnd_{nullptr};
+    bool needs_reinit_ = false;
+
     ComPtr<ID2D1Factory> factory_;
     ComPtr<ID2D1HwndRenderTarget> target_;
     std::unordered_map<COLORREF, ComPtr<ID2D1SolidColorBrush>> brush_cache_;
