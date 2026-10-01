@@ -76,10 +76,9 @@ static double get_buffered_windup() {
     int buffered_ms = TimingJitter::apply_positive(adaptive_ms,
                                                     g_settings.windup_jitter_ms);
     double total = windup + buffered_ms / 1000.0;
-    // Cap total windup — but never below actual windup (would cancel attack)
+    // Cap total windup (user adjusts per champion)
     if (g_settings.max_windup_ms > 0) {
-        double cap = std::max(windup, g_settings.max_windup_ms / 1000.0);
-        total = std::min(total, cap);
+        total = std::min(total, g_settings.max_windup_ms / 1000.0);
     }
     return total;
 }
@@ -191,6 +190,7 @@ static void orbwalk_loop(std::stop_token stop) {
     auto next_attack = std::chrono::steady_clock::now();
     auto next_move = next_attack;
     auto next_input = next_attack;
+    auto move_deadline = next_attack;
 
     auto interval = std::chrono::milliseconds(std::max(1, g_settings.orbwalk_tick_rate_ms));
 
@@ -220,17 +220,18 @@ static void orbwalk_loop(std::stop_token stop) {
                 double spa = get_seconds_per_attack();
                 next_move = attack_time + std::chrono::microseconds(static_cast<int64_t>(buffered_windup * 1e6));
                 next_attack = attack_time + std::chrono::microseconds(static_cast<int64_t>(spa * 1e6));
-                // Cap move window
+                // Set move deadline — stop moving after max_move_ms (0 = no limit)
                 if (g_settings.max_move_ms > 0) {
-                    auto max_next = next_move + std::chrono::milliseconds(g_settings.max_move_ms);
-                    if (next_attack > max_next) next_attack = max_next;
+                    move_deadline = next_move + std::chrono::milliseconds(g_settings.max_move_ms);
+                } else {
+                    move_deadline = next_attack; // move until next attack
                 }
                 continue;
             }
         }
 
-        // Move phase — throttled by next_move and next_input
-        if (now >= next_move && now >= next_input) {
+        // Move phase — throttled by next_move, next_input, and move_deadline
+        if (now >= next_move && now >= next_input && now < move_deadline) {
             // Feature 9: Pattern Scrambling — skip move chance
             double roll = TimingJitter::next_double();
             if (roll < g_settings.skip_move_chance) {
