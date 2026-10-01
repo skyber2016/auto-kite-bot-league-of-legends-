@@ -15,6 +15,9 @@ add_executable(auto_kite
     src/input/input_simulator.cpp
     src/detection/color_matcher.cpp
     src/detection/cluster_finder.cpp
+    src/strategy/auto_strategy.cpp
+    src/strategy/manual_strategy.cpp
+    src/strategy/strategy_factory.cpp
 )
 target_include_directories(auto_kite PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(auto_kite PRIVATE /W4 /EHsc)
